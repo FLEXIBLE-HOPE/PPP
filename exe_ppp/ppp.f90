@@ -276,9 +276,9 @@ DATA lfix /.FALSE./
     IF ((INT((CKF.mjd-CKF.mjd0)*86400.0+CKF.sod-CKF.sod0).NE.0) .AND. MOD(INT((CKF.mjd-CKF.mjd0)*86400.0+CKF.sod-CKF.sod0),CKF.ReConvTime) .EQ. 0) THEN
       CALL ppp_cnt_prmt(CKF,SIT,SAT,NM)
       DO isit=1, CKF.nsit
-        NM(isit).infs=0.d0
-        NM(isit).esig=0.d0
-        CALL ppp_init_pri(CKF,SAT,SIT(isit),OB(isit),NM(isit),PM(1,isit),isit)
+        !! NOTE: the ambiguities must be flagged BEFORE ppp_init_pri, which wipes
+        !! OB.ltog and OB.pname: afterwards ltog(iamb,isat) is 0, ipar becomes negative
+        !! and AM(ipar,isit) is written out of range, losing the old ambiguity lifetime
         DO isat=1, CKF.nprn
           IF (COUNT(OB(isit).obs(isat,1:2*MAXFREQ).NE.0.d0).GE.4) THEN
             IF (CKF.llog .EQ. .TRUE.) THEN
@@ -287,17 +287,26 @@ DATA lfix /.FALSE./
                 WRITE(camb,'(A4,I1)') 'AMBL',ifreq
                 iamb =pointer_string(OB(isit).npar,OB(isit).pname,camb)
                 IF (OB(isit).omc(isat,ifreq) .EQ. 0.d0) CYCLE
-                ipar=OB(isit).ltog(iamb,isat)-NM(isit).npc
+                ipar=0
+                IF (iamb .GT. 0) ipar=OB(isit).ltog(iamb,isat)-NM(isit).npc
                 OB(isit).flag(isat,ifreq)=1
                 OB(isit).lifamb(isat,ifreq,1)=CKF.mjd+CKF.sod/86400.d0
-                OB(isit).lifamb(isat,ifreq,2)=AM(ipar,isit).ptime(2)
-                AM(ipar,isit).ptime(2)=CKF.mjd+CKF.sod/86400.d0
+                IF (ipar .GE. 1) THEN
+                  OB(isit).lifamb(isat,ifreq,2)=AM(ipar,isit).ptime(2)
+                  AM(ipar,isit).ptime(2)=CKF.mjd+CKF.sod/86400.d0
+                ELSE
+                  !! no old ambiguity to close, restart the lifetime at this epoch
+                  OB(isit).lifamb(isat,ifreq,2)=CKF.mjd+CKF.sod/86400.d0
+                END IF
               END DO
             ELSE
               OB(isit).flag(isat,1:MAXFREQ)=1
             END IF
           END IF
         END DO
+        NM(isit).infs=0.d0
+        NM(isit).esig=0.d0
+        CALL ppp_init_pri(CKF,SAT,SIT(isit),OB(isit),NM(isit),PM(1,isit),isit)
       END DO
       CKF.lamb=.FALSE.
     END IF
