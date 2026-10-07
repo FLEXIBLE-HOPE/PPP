@@ -4,8 +4,8 @@ all: ppp
 
 
 PATH_OBJ = ../OBJ_INTEL
-FFLAGS   = -w -O3 -132 -traceback -mkl  -module $(PATH_OBJ)
-FFLAGS7  = -w -O3 -132 -traceback -mkl  -module $(PATH_OBJ)
+FFLAGS   = -w -O3 -xHost -qopt-zmm-usage=high -132 -traceback -mkl=parallel  -module $(PATH_OBJ)
+FFLAGS7  = -w -O3 -xHost -qopt-zmm-usage=high -132 -traceback -mkl=parallel  -module $(PATH_OBJ)
 FTN      = ifort
 CFLAGS   = -I ./
 CC       = icc

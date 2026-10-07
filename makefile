@@ -3,6 +3,17 @@
 #  Version 4.0.1
 #  April 2025
 #
+#  2026-10-07: 参考 /home/xfd/ckdrt_irc_cr_orb_sdb/CMakeLists.txt 对齐编译选项:
+#    各 Makefile 统一补 -xHost -qopt-zmm-usage=high; exe_ppp 的 -mkl 改为 -mkl=parallel
+#    (与链接层 mkl_intel_thread + iomp5 配套)。
+#  未启用参考程序的三项 (原因):
+#    -qopenmp -save : 本程序无 !$OMP 并行区, 无收益; 参考自身记录过 -qopenmp 隐含
+#                     -auto 压低 WL 固定率, 需配 -save 才恢复, 属被动修补。
+#    -heap-arrays   : 无阈值时把全部自动数组/临时量挪到堆, 会拖慢热循环, 本程序无栈
+#                     溢出证据, 不加。
+#    -fimplicit-none: 20 年老代码, 逐文件校验成本高, 暂不加。
+#  注意: -xHost 会改变向量化路径与 FMA 收缩, 浮点结果末位会变, 需重跑验证。
+#
 
 OBJ_DIR = OBJ_INTEL
 

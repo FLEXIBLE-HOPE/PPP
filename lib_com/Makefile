@@ -4,8 +4,8 @@ all: comLib
 
 
 PATH_OBJ = ../OBJ_INTEL
-FFLAGS   = -w -O3 -fp-model precise -132 -traceback -module $(PATH_OBJ) -mkl=parallel -qopt-zmm-usage=high
-FFLAGS7  = -w -O3 -fp-model precise -132 -traceback -module $(PATH_OBJ) -mkl=parallel -qopt-zmm-usage=high
+FFLAGS   = -w -O3 -xHost -fp-model precise -132 -traceback -module $(PATH_OBJ) -mkl=parallel -qopt-zmm-usage=high
+FFLAGS7  = -w -O3 -xHost -fp-model precise -132 -traceback -module $(PATH_OBJ) -mkl=parallel -qopt-zmm-usage=high
 FTN      = ifort
 CFLAGS   = -I ./
 CC       = icc
