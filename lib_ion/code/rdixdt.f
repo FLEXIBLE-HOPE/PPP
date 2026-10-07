@@ -1,0 +1,101 @@
+C*
+      SUBROUTINE RDIXDT(NUMVAL,IEXP,TECVAL,IRC)
+CC
+CC NAME       :  RDIXDT
+CC
+CC PURPOSE    :  READ IONEX DATA
+CC
+CC PARAMETERS :
+CC         IN :  NUMVAL : NUMBER OF TEC/RMS VALUES            I*4
+CC               IEXP   : ACTIVE EXPONENT                     I*4
+CC        OUT :  TECVAL : TEC/RMS VALUES (IN TECU)            R*8(*)
+CC                        =999.9: UNDEFINED
+CC               IRC    : RETURN CODE                         I*4
+CC                        =0: ERROR OCCURRED
+CC                        =1: OK
+CC
+CC SR CALLED  :  ---
+CC
+CC REMARKS    :  IONEX VERSION 1.0
+CC
+CC AUTHOR     :  S.SCHAER
+CC
+CC VERSION    :  4.1
+CC
+CC CREATED    :  11-SEP-97             LAST MODIFIED :  05-JAN-98
+CC
+CC CHANGES    :  05-JAN-98 : SS: "AUXVAL" REDIMENSIONED
+CC
+CC COPYRIGHT  :  ASTRONOMICAL INSTITUTE
+CC      1997      UNIVERSITY OF BERNE
+CC                    SWITZERLAND
+CC
+C*
+      IMPLICIT REAL*8 (A-H,O-Z)
+C
+      CHARACTER*80  LINE
+C
+      REAL*8        TECVAL(*)
+C
+      INTEGER*4     AUXVAL(16)
+C
+      INCLUDE 'I:COMLFNUM'
+C
+C COMPUTE NUMBER OF DATA LINES TO BE READ
+C ---------------------------------------
+      NLIN=(NUMVAL-1)/16+1
+C
+C READ SINGLE DATA BLOCK
+C ----------------------
+      DO ILIN=1,NLIN
+        IVAL1=16*ILIN-15
+        IVAL2=16*ILIN
+        IF (IVAL2.GT.NUMVAL) IVAL2=NUMVAL
+C
+        READ(LFNLOC,910,END=100) LINE
+910     FORMAT(A80)
+C
+        NAUX=IVAL2-IVAL1+1
+        READ(LINE,920,ERR=200) (AUXVAL(IAUX),IAUX=1,NAUX)
+920     FORMAT(16I5)
+C
+C CONVERT TEC/RMS VALUES FROM ACTIVE UNIT INTO TECU
+C -------------------------------------------------
+        DO IAUX=1,NAUX
+          IVAL=IVAL1+IAUX-1
+          IF (AUXVAL(IAUX).NE.9999) THEN
+            TECVAL(IVAL)=DBLE(10.D0**IEXP*AUXVAL(IAUX))
+          ELSE
+            TECVAL(IVAL)=999.9D0
+          ENDIF
+        ENDDO
+      ENDDO
+C
+      IRC=1
+      GOTO 300
+C
+C END OF FILE REACHED
+C -------------------
+100   CONTINUE
+      WRITE(LFNERR,1910)
+1910  FORMAT(/,' *** SR RDIXDT: END OF FILE REACHED',/)
+C
+      IRC=0
+      GOTO 300
+C
+C ERROR READING IONEX DATA
+C ------------------------
+200   CONTINUE
+      WRITE(LFNERR,1920) LINE
+1920  FORMAT(/,' *** SR RDIXDT: ERROR READING IONEX DATA',
+     1  /,A80,/)
+C
+      IRC=0
+      GOTO 300
+C
+C RETURN
+C ------
+300   CONTINUE
+C
+      RETURN
+      END

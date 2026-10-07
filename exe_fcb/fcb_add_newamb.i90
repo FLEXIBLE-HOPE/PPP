@@ -1,0 +1,121 @@
+# 1 "/home/xfd/data/PPP/src/exe_fcb/fcb_add_newamb.f90"
+!
+!! purpose   : add the new ambiguities to the estimator. Newly occured or detected
+!!             is indicated by OB.flag.ne.0. Parameter table must be updated and
+!!             so do the estimator.
+!! parameter :
+!!    input  : jd,sod -- time tag
+!!             isit   -- index of station
+!!             BCF    -- SRIF struct
+!!             OB     -- observation struct
+!!             NM,PM  -- normal matrix & PAR table
+!! author    : Geng J
+!! created   : Nov. 11, 2007
+!
+SUBROUTINE fcb_add_newamb(isit,CKF,OB,PM,NM,infs)
+!!
+!*
+USE info
+USE ckdctrl
+USE observation
+USE ISO_FORTRAN_ENV
+IMPLICIT NONE
+
+!*
+! The arguments
+!!----------------------
+INTEGER(IT) :: isit
+TYPE(CKDCFG) :: CKF
+TYPE(RNXOBS) :: OB
+TYPE(INFM) :: NM
+TYPE(PRMT) :: PM(1:*)
+REAL(RL) :: infs(1:*)
+
+!*
+! The local variables
+!!-----------------------
+  INTEGER(IT) :: i,j,isat,ipar,nbias
+  INTEGER(IT) :: isys,ifreq
+  CHARACTER(LEN=5) :: camb
+
+!*
+! The function called
+!!---------------------------
+  INTEGER(IT) :: pointer_string
+
+!*
+! Start the exectuable code
+!!---------------------------
+
+!! add new ambiguities
+  nbias  =0
+
+  DO isat=1, CKF.nprn
+
+    isys=INDEX(SYS,CKF.cprn(isat)(1:1))
+    DO ifreq=1, CKF.nfq(isys)
+
+      WRITE(camb,'(A4,I1)') 'AMBL',ifreq
+      ipar=pointer_string(OB.npar,OB.pname,camb)
+
+      IF (OB.obs(isat,ifreq) .EQ. 0.d0) CYCLE
+      IF (OB.flag(isat,ifreq) .EQ. 1) THEN
+        nbias=nbias+1
+        IF (NM.imtx+nbias+1 .GT. NM.nmtx) THEN
+          WRITE(ERROR_UNIT,'(A,I5,F15.7,6I5)') '***ERROR(fcb_add_newamb): S matrix too small ', CKF.mjd, CKF.sod, NM.imtx, nbias, NM.nc, NM.np, NM.nmtx,isit
+          CALL exit(1)
+        END IF
+        PM(NM.imtx+nbias).pname   =camb
+        PM(NM.imtx+nbias).iobs    =0
+        PM(NM.imtx+nbias).pcode(1)=isit
+        PM(NM.imtx+nbias).pcode(2)=isat
+        PM(NM.imtx+nbias).pcode(3)=ifreq
+        PM(NM.imtx+nbias).xini    =0.d0
+        IF (CKF.llog .EQ. .FALSE.) THEN
+          PM(NM.imtx+nbias).ptime   =CKF.mjd+CKF.sod/86400.d0
+        ELSE
+          PM(NM.imtx+nbias).ptime(1)=OB.lifamb(isat,ifreq,1)
+          PM(NM.imtx+nbias).ptime(2)=OB.lifamb(isat,ifreq,2)
+        END IF
+        PM(NM.imtx+nbias)%xrwl    =0.d0      ! The sum of fractional cycle of MW combinations
+        PM(NM.imtx+nbias)%xrewl   =0.d0
+        PM(NM.imtx+nbias)%xswl    =0.d0      ! The weight sum of MW fractional cycle part
+        PM(NM.imtx+nbias)%xsewl   =0.d0
+        PM(NM.imtx+nbias)%elev    =0.d0      ! mean elevation
+        PM(NM.imtx+nbias)%abwl    =0.d0      ! The value of MW combination
+        PM(NM.imtx+nbias)%abewl   =0.d0
+        PM(NM.imtx+nbias)%sigw    =0.d0      ! The sigma of MW combination
+        PM(NM.imtx+nbias)%sigew   =0.d0
+        PM(NM.imtx+nbias)%rw      =0.d0      ! weight of widelane
+        PM(NM.imtx+nbias)%rew     =0.d0
+        PM(NM.imtx+nbias)%zw      =0.d0      ! initial wide-lane value
+        PM(NM.imtx+nbias)%zew     =0.d0
+        PM(NM.imtx+nbias)%map     =0.d0      ! as a flag
+        OB.ltog(ipar,isat)=NM.imtx+nbias
+      END IF
+    END DO
+  END DO
+
+  IF (nbias .EQ. 0) RETURN
+
+!! shift the rightsite of S to the last column and clean
+  DO i=1,NM.imtx+nbias
+    IF (i .GT. NM.imtx) THEN
+      infs(NM.iptx(NM.imtx+1+nbias)+i)=0.d0
+    ELSE
+      infs(NM.iptx(NM.imtx+1+nbias)+i)=infs(NM.iptx(NM.imtx+1)+i)
+    END IF
+  END DO
+  DO j=1,NM.imtx+nbias
+    DO i=1,NM.imtx+nbias
+      IF (i.LE.NM.imtx .AND. j.LE.NM.imtx) CYCLE
+      infs(NM.iptx(j)+i)=0.d0
+      IF (i .EQ. j) infs(NM.iptx(j)+i)=1.d-4 !@ CMT BY XSY: FOR LEO ONBOARD PPP, THIS WILL BE SET AS 1.D-8 BECAUSE THE AMBIGUITY IS VERY LARGE
+    END DO
+  END DO
+  NM.ns  =NM.ns+nbias
+  NM.imtx=NM.imtx+nbias ! PM:np+nc+ns
+
+  RETURN
+
+END SUBROUTINE

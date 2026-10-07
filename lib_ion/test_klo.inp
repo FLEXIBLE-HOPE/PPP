@@ -1,0 +1,7 @@
+ola_000A.00n                   ! Rinex navigation file
+gps_tool.out                   ! Output file
+2019 05 14 02 24 22.           ! UTC-Time  (yy mm dd hr min sec)
+ 44.7158668970400                          ! Elevation (deg)
+ -143.553852787325          ! Azimuth   (deg)
+ 25.0816298471137                          ! Latitude  (deg - North)
+121.568482943805                          ! Longitude (deg - East)

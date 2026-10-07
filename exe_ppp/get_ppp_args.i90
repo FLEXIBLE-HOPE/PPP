@@ -1,0 +1,1183 @@
+# 1 "/home/xfd/data/PPP/src/exe_ppp/get_ppp_args.f90"
+!*
+SUBROUTINE get_ppp_args(CKF,SIT,SAT,BHD,IOD)
+!!
+!! GET CONFIGURATION INFORMATION FOR PPP
+!!
+!! JIANGHUI GENG (JAN.13.2012): CREATED
+!! JING GUO (JUN.09.2013): MULTI-GNSS
+!! JING GUO (JAN.06.2014): RAW OBSERVATION
+!!
+!*
+USE ion
+USE orbit
+USE brdeph
+USE tables
+USE ckdctrl
+USE station
+USE satellite
+USE ISO_FORTRAN_ENV
+IMPLICIT NONE
+
+!*
+! THE ARGUMENTS
+!!------------------------------
+TYPE(CKDCFG) :: CKF
+TYPE(BRDHEAD) :: BHD
+TYPE(IONEX) :: IOD
+TYPE(SITE) :: SIT(1:*)
+TYPE(SATE) :: SAT(1:*)
+TYPE(SATEPAR) :: ICS
+
+!*
+! THE LOCAL VARIABLES
+!!------------------------------
+  INTEGER(IT) :: i=0,j=0
+  INTEGER(IT) :: k=0,l=0,ii=0
+  INTEGER(IT) :: nargs=0
+  INTEGER(IT) :: lfn=0
+  INTEGER(IT) :: lfncfg=0
+  INTEGER(IT) :: outpco=0
+  INTEGER(IT) :: ierr=0
+  INTEGER(IT) :: nfreq=0
+  INTEGER(IT) :: isys=0
+  INTEGER(IT) :: nsys=0
+  REAL(RL) :: sigma = 0.d0
+  REAL(RL) :: sigmaqx = 0.d0
+
+  CHARACTER(LEN_FILENAME) :: cfg=''
+  CHARACTER(LEN_STRING) :: msg=''
+  CHARACTER(LEN_STRING) :: key=''
+  CHARACTER(LEN_STRING) :: fmt=''
+  CHARACTER(LEN_STRING) :: freq(MAXSYS)
+
+  CHARACTER(LEN_ANTENNA) :: antname,antnumb
+  CHARACTER(LEN_STRING) :: rinex_path,log_path,brdc_path,bracket
+  INTEGER(IT) :: iy,im,id,ih,imi,seslen,mjd
+  REAL(RL) :: isec,sod,dt
+  
+  INTEGER(IT) :: neph(MAXSYS)
+  TYPE(GPS_BRDEPH) :: eph(MAXEPH,MAXSYS)
+  TYPE(GLONASS_BRDEPH) :: ephg(MAXEPH)
+
+  INTEGER(IT) :: nword = 0
+  CHARACTER(LEN_ORBPAR) :: word(30) = ''
+
+  INTEGER(IT) :: NFQ(MAXSYS)
+  CHARACTER(LEN_FREQ) :: FQ(MAXFREQ,MAXSYS)  
+  CHARACTER(LEN=1) :: inrefclk
+
+  LOGICAL(LG) :: lexist,lfound
+  TYPE(T_FILETABLE) :: FT
+
+!*
+! THE FUNCTIONS CALLED
+!!------------------------------
+  INTEGER(IT) :: iargc
+  CHARACTER(LEN_STRING) :: findkey
+  CHARACTER(LEN_STRING) :: lower_string
+  INTEGER(IT) :: get_valid_unit
+  INTEGER(IT) :: pointer_string
+  INTEGER(IT) :: modified_julday
+
+!*
+! THE EXECTUABLE CODE
+!!-----------------------------
+
+! THE USAGE
+  nargs=iargc()
+  IF (nargs .LT. 1) THEN
+    WRITE(OUTPUT_UNIT,'(A)') ' Position And Navigation Data Analyst (@PANDA) software '
+    WRITE(OUTPUT_UNIT,'(A)') TRIM(VERSION)
+    WRITE(OUTPUT_UNIT,'(A)') ' Precise Point Position (PPP) for Multi-GNSS systems (including '
+    WRITE(OUTPUT_UNIT,'(A)') ' GPS, GLONASS, GALILEO, BEIDOU, QZSS, and so on) with/without'
+    WRITE(OUTPUT_UNIT,'(A)') ' integer ambiguity resolution in real-time or post procession'
+    WRITE(OUTPUT_UNIT,'(A)') ' mode based on Ionosphere-Free combination or raw observables'
+    WRITE(OUTPUT_UNIT,'(A)') ' '
+    WRITE(OUTPUT_UNIT,'(A)') ' USAGE: ppp file_table [-hold] [-debug] [-post]'
+    WRITE(OUTPUT_UNIT,'(A)') ' '
+    WRITE(OUTPUT_UNIT,'(A)') ' -hold   : Hode the fixed ambiguities for the following epochs,'
+    WRITE(OUTPUT_UNIT,'(A)') '           otherwise the ambiguities are tried to fix in each epochs.'
+    WRITE(OUTPUT_UNIT,'(A)') ' -debug  : The data will be processed in simulated real-time mode.'
+    WRITE(OUTPUT_UNIT,'(A)') '           The necessary data (Broadcast Ephemeris, DCB, real-'
+    WRITE(OUTPUT_UNIT,'(A)') '           time orbit) will be downloaded in real-time. And the'
+    WRITE(OUTPUT_UNIT,'(A)') '           obervation data saved in internal format are used.'
+    WRITE(OUTPUT_UNIT,'(A)') ' -post   : The RINEX data will be processed in post mode.'
+    WRITE(OUTPUT_UNIT,'(A)') '           And the only one orbit and clock file will be used and'
+    WRITE(OUTPUT_UNIT,'(A)') '           should be prepared in advanced.'
+    WRITE(OUTPUT_UNIT,'(A)') ' -uselog : The PANDA data Quality Check (QC) file will be used to'
+    WRITE(OUTPUT_UNIT,'(A)') '           replace the DIA procedure.'
+    WRITE(OUTPUT_UNIT,'(A)') ' -brdc   : The BRDC emphsize is used for LEO orbit determination'
+! WRITE(OUTPUT_UNIT,'(A)') ' -rbias  : + FPA file'
+! WRITE(OUTPUT_UNIT,'(A)') '           The FPA bias between different receiver types for GEC satellites'
+    WRITE(OUTPUT_UNIT,'(A)') ' -sdb    : + SDB file'
+    WRITE(OUTPUT_UNIT,'(A)') '           correct the SDB.'
+    WRITE(OUTPUT_UNIT,'(A)') ' -sitcon : + value (in meter)'
+    WRITE(OUTPUT_UNIT,'(A)') '           The station coordinates(XYZ) are constrained to the kin file by value.'
+    WRITE(OUTPUT_UNIT,'(A)') ' -lockout: + mjd0 sod0 mjd1 sod1'
+    WRITE(OUTPUT_UNIT,'(A)') '           Set the observable/ppp-rtk lockout time with [mjd0 sod0 mjd1,sod1), the default is not set.'
+    WRITE(OUTPUT_UNIT,'(A)') ' -ref    : + sys [G/E/C]'
+    WRITE(OUTPUT_UNIT,'(A)') '           If [-ref] is input, we will set the input as reference constellation. The default is not input' 
+    WRITE(OUTPUT_UNIT,'(A)') ' -ionpro : + char [PDUD/PDSD/SD/GRID]'
+    WRITE(OUTPUT_UNIT,'(A)') '           This is only used for PPP-RTK. The default is set as PDUD'
+    WRITE(OUTPUT_UNIT,'(A)') ' '
+    WRITE(OUTPUT_UNIT,'(A)') ' -hisi   : Process the HISI data and correct code phase consistency, the default is false.'
+    WRITE(OUTPUT_UNIT,'(A)') ' -lli    : The LLI is used for cycle slip detection, the default is false.'
+    WRITE(OUTPUT_UNIT,'(A)') ' -rclk   : If [-rclk] is input, we will estimate recerver clock for all system but not one rclock and ISB.'
+    WRITE(OUTPUT_UNIT,'(A)') '           The default is not input, and estimate the ISB' 
+    WRITE(OUTPUT_UNIT,'(A)') ' -lrecdcb: If [-lrecdcb] is input, we will estimate the RECDCB for the third frequency code observations.'
+    WRITE(OUTPUT_UNIT,'(A)') '           The default is not input, and do not use the third frequency pseudorange observation'          
+    WRITE(OUTPUT_UNIT,'(A)') ' -leoifb : If [-leoifb] is input, we will estimate LEO time synchronization bias similar to GLONASS IFB.'
+    WRITE(OUTPUT_UNIT,'(A)') '           The default is not input, and consider the LEO satellites as a system'
+    WRITE(OUTPUT_UNIT,'(A)') ' '
+    WRITE(OUTPUT_UNIT,'(A)') ' OBSTYPE: '//TRIM(OBSTYPE)
+    WRITE(OUTPUT_UNIT,'(A)') ' '
+    WRITE(OUTPUT_UNIT,'(A)') ' COMMENT: For multi-frequency, we should pay attention to the the GFIF cycle slip detection thershold [0.1m].'
+    WRITE(OUTPUT_UNIT,'(A)') '          IF the IFCB file is not exsit for multi-frequency or complex environment, the GFIF thershold may be set lager'
+    CALL exit(1)
+  END IF
+
+! TO GET THE FIRST ARGUMENT: FILE_TABLE
+  CALL getarg(1,cfg)
+
+  INQUIRE(FILE=cfg,EXIST=lexist)
+  IF (lexist .EQ. .FALSE.) THEN
+    WRITE(ERROR_UNIT,'(A)') '***ERROR(get_ppp_args): '//TRIM(cfg)//' is not exist'
+    CALL exit(1)
+  END IF
+  CALL read_filetable(cfg,FT)
+
+! TO GET THE OTHER ARGUMENTS
+  CKF.ldebug=.FALSE.
+  CKF.lpost=.FALSE.
+  CKF.llog=.FALSE.
+  CKF.lamb=.FALSE.
+  CKF%lbds=.FALSE.
+  CKF%lisb=.TRUE.
+  CKF%lrecdcb=.FALSE.
+  CKF%lleoifb=.FALSE.
+  CKF.gap = 600
+  CKF.lg = 1.0
+  CKF.lw = 1.0
+  inrefclk = ''
+  i=2
+  DO WHILE(i .LE. nargs)
+    CALL getarg(i,msg)
+    IF (msg(1:5) .EQ. '-hold') CKF.lamb=.TRUE.
+    IF (msg(1:6) .EQ. '-debug') CKF.ldebug=.TRUE.
+    IF (msg(1:5) .EQ. '-post') CKF.lpost=.TRUE.
+    IF (msg(1:7) .EQ. '-uselog') CKF.llog=.TRUE.
+    IF (msg(1:5) .EQ. '-brdc') CKF%lbds=.TRUE.
+    IF (msg(1:4) .EQ. '-lli') CKF%lli_flag=.TRUE.
+    IF (msg(1:5) .EQ. '-hisi') CKF%lhisi=.TRUE.
+    IF (msg(1:5) .EQ. '-rclk') CKF%lisb=.FALSE.
+    IF (msg(1:8) .EQ. '-lrecdcb') CKF%lrecdcb=.TRUE.
+    IF (msg(1:7) .EQ. '-leoifb') CKF%lleoifb=.TRUE.
+
+    IF (msg(1:4) .EQ. '-ref') THEN
+      i=i+1
+      IF (i .GT. nargs) THEN
+        WRITE(ERROR_UNIT,'(A)')'***ERROR(get_ppp_args): the reference system is not input for [-ref] .'
+        CALL exit(1)
+      END IF
+      CALL getarg(i,msg)
+      READ(msg,*) inrefclk
+    END IF
+
+    IF (msg(1:7) .EQ. '-ionpro') THEN
+      i=i+1
+      IF (i .GT. nargs) THEN
+        WRITE(ERROR_UNIT,'(A)')'***ERROR(get_ppp_args): the ionsphere products model is not input for [-ionpro].'
+        CALL exit(1)
+      END IF
+      CALL getarg(i,msg)
+      READ(msg,*) CKF%ionpro
+      IF (TRIM(CKF%ionpro).NE.'PDUD' .AND. TRIM(CKF%ionpro).NE.'PDSD' .AND. TRIM(CKF%ionpro).NE.'SD' .AND. TRIM(CKF%ionpro).NE.'GRID') THEN
+        WRITE(ERROR_UNIT,'(A)') '***ERROR(get_ppp_args): PDUD, PDSD, SD or GRID are accepted for ionsphere products.'
+        CALL exit(1)
+      END IF
+    END IF
+
+    IF (msg(1:7) .EQ. '-sitcon') THEN
+      CKF%lsitcons = .TRUE.
+      i=i+1
+      IF (i .GT. nargs) THEN
+        WRITE(ERROR_UNIT,'(A)')'***ERROR(get_ppp_args): the station constrains value in meter is not input.'
+        CALL exit(1)
+      END IF
+      CALL getarg(i,msg)
+      READ(msg,*)CKF%sitConstrians(1)
+      CKF%sitConstrians(2)=CKF%sitConstrians(1)
+      CKF%sitConstrians(3)=CKF%sitConstrians(1)
+    END IF
+
+    IF (msg(1:8) .EQ. '-lockout') THEN
+      i=i+1
+      IF (i .GT. nargs) THEN
+        WRITE(ERROR_UNIT,'(A)')'***ERROR(get_ppp_args): the lockout span [-lockout mjd0] is not input'
+        CALL exit(1)
+      END IF
+      CALL getarg(i,msg)
+      READ(msg,*)mjd
+      i=i+1
+      IF (i .GT. nargs) THEN
+        WRITE(ERROR_UNIT,'(A)')'***ERROR(get_ppp_args): the lockout span [-lockout sod0] is not input'
+        CALL exit(1)
+      END IF
+      CALL getarg(i,msg)
+      READ(msg,*)sod
+      CKF%lockout(1)=mjd+sod/86400.d0
+
+      i=i+1
+      IF (i .GT. nargs) THEN
+        WRITE(ERROR_UNIT,'(A)')'***ERROR(get_ppp_args): the lockout span [-lockout mjd1] is not input'
+        CALL exit(1)
+      END IF
+      CALL getarg(i,msg)
+      READ(msg,*)mjd
+      i=i+1
+      IF (i .GT. nargs) THEN
+        WRITE(ERROR_UNIT,'(A)')'***ERROR(get_ppp_args): the lockout span [-lockout sod1] is not input'
+        CALL exit(1)
+      END IF
+      CALL getarg(i,msg)
+      READ(msg,*)sod
+      CKF%lockout(2)=mjd+sod/86400.d0
+
+      IF (CKF%lockout(2)-CKF%lockout(1).LT.0.D0) THEN
+        WRITE(ERROR_UNIT,'(A)')'***ERROR(get_ppp_args): the lockout span is error, the start is less than the end'
+        CALL exit(1)
+      END IF
+    END IF
+
+    IF (msg(1:6) .EQ. '-rbias') THEN
+      i=i+1
+      IF (i .GT. nargs) THEN
+        WRITE(ERROR_UNIT,'(A)')'***ERROR(get_ppp_args): receiver bias file [-rbias] is not input'
+        CALL exit(1)
+      END IF
+      CALL getarg(i,msg)
+      READ(msg,*)CKF%flnrbias
+      INQUIRE(FILE=CKF%flnrbias,EXIST=lexist)
+      IF (lexist .EQ. .FALSE.) THEN
+        WRITE(ERROR_UNIT,'(A)') '***ERROR(get_ppp_args): receiver bias file [-rbias] '//TRIM(msg)//' is not exist'
+        CALL exit(1)
+      END IF
+    END IF
+
+    IF (msg(1:4) .EQ. '-sdb') THEN
+      i=i+1
+      IF (i .GT. nargs) THEN
+        WRITE(ERROR_UNIT,'(A)')'***ERROR(get_ppp_args): receiver bias file [-sdb] is not input'
+        CALL exit(1)
+      END IF
+      CALL getarg(i,msg)
+      READ(msg,*)CKF%flnsdb
+      INQUIRE(FILE=CKF%flnsdb,EXIST=lexist)
+      IF (lexist .EQ. .FALSE.) THEN
+        WRITE(ERROR_UNIT,'(A)') '***ERROR(get_ppp_args): receiver bias file [-sdb] '//TRIM(msg)//' is not exist'
+        CALL exit(1)
+      END IF
+    END IF
+    i=i+1
+  END DO
+
+! THE DIRECTORY OF CONFIGURATION FILE
+  cfg=f_tablefilename('config')
+  INQUIRE(FILE=cfg,EXIST=lexist)
+  IF (lexist .EQ. .FALSE.) THEN
+    WRITE(ERROR_UNIT,'(A)') '***ERROR(get_ppp_args): '//TRIM(cfg)//' is not exist'
+    CALL exit(1)
+  END IF
+
+! OPEN AND READ THE CONFIGURATION FILE
+  lfncfg=get_valid_unit(10)
+  OPEN(UNIT=lfncfg,FILE=cfg,STATUS='OLD',ACTION='READ',IOSTAT=ierr)
+  IF (ierr .NE. 0) THEN
+    WRITE(ERROR_UNIT,'(A)') '***ERROR(get_ppp_args): open '//TRIM(cfg)
+    CALL exit(1)
+  END IF
+
+! THE BEGINNING EPOCH AND LENGTH OF ARC FOR POST PROCESSING
+  IF (CKF.lpost .EQ. .TRUE.) THEN
+    msg='Start time&session length'
+    key=findkey(lfncfg,msg,'')
+    IF (key(1:5) .EQ. 'EMPTY') GOTO 100
+    READ(key,*,ERR=200) iy,im,id,ih,imi,isec,seslen
+    CALL yr2year(iy)
+    CKF.mjd0=modified_julday(id,im,iy)
+    CKF.sod0=ih*3600.d0+imi*60.d0+isec
+    CKF.mjd1=INT(CKF.mjd0+(CKF.sod0+seslen)/86400.d0)
+    CKF.sod1=CKF.sod0+seslen-(CKF.mjd1-CKF.mjd0)*86400
+
+    CALL get_file_name(.FALSE.,'orb','SATNAM=gnss',iy,im,id,ih,CKF.flnorb)
+    CALL get_file_name(.FALSE.,'orb','SATNAM=leo',iy,im,id,ih,CKF.flnleo)
+    CALL get_file_name(.FALSE.,'erp','CEN=whu',iy,im,id,ih,CKF.flnerp)
+    CALL get_file_name(.FALSE.,'pos',' ',iy,im,id,ih,CKF.flnpos)
+    CALL get_file_name(.FALSE.,'kin',' ',iy,im,id,ih,CKF.flnkin)
+    CALL get_file_name(.FALSE.,'clk',' ',iy,im,id,ih,CKF.flncck)
+    CALL get_file_name(.FALSE.,'rclk',' ',iy,im,id,ih,CKF.flnrck)
+    CALL get_file_name(.FALSE.,'ifcb',' ',iy,im,id,ih,CKF.flnifcb)
+    CALL get_file_name(.FALSE.,'res',' ',iy,im,id,ih,CKF.flnres)
+    CALL get_file_name(.FALSE.,'ztd',' ',iy,im,id,ih,CKF.flnztd)
+    CALL get_file_name(.FALSE.,'amb',' ',iy,im,id,ih,CKF.flnamb)
+    CALL get_file_name(.FALSE.,'fnl',' ',iy,im,id,ih,CKF.flnfnl)
+    CALL get_file_name(.FALSE.,'fwl',' ',iy,im,id,ih,CKF.flnfwl)
+    CALL get_file_name(.FALSE.,'fewl',' ',iy,im,id,ih,CKF.flnfewl)
+    CALL get_file_name(.FALSE.,'feewl',' ',iy,im,id,ih,CKF.flnfeewl)
+    CALL get_file_name(.FALSE.,'fhewl',' ',iy,im,id,ih,CKF.flnfhewl)
+    CALL get_file_name(.FALSE.,'ion',' ',iy,im,id,ih,CKF.flnion)
+    CALL get_file_name(.FALSE.,'dop',' ',iy,im,id,ih,CKF.flndop)
+    CALL get_file_name(.FALSE.,'osb',' ',iy,im,id,ih,CKF.flnosb)
+    CALL get_file_name(.FALSE.,'osbcode',' ',iy,im,id,ih,CKF.flnosbcode)
+    CALL get_file_name(.FALSE.,'osbupd',' ',iy,im,id,ih,CKF.flnosbupd)
+    CALL get_file_name(.FALSE.,'pco',' ',iy,im,id,ih,CKF.flnpco)
+    CALL get_file_name(.FALSE.,'ics','SATNAM=leo',iy,im,id,ih,CKF.flnpar)
+  END IF
+
+! THE PORT OF THE LOCAL HOST
+  IF (CKF.lpost .EQ. .FALSE.) THEN
+    msg='Port'
+    key=findkey(lfncfg,msg,' ')
+    IF (key(1:5) .EQ. 'EMPTY') GOTO 100
+    CKF.port=TRIM(key)
+
+! DEFINE THE FILE NAMES ACCORDING TO THE PORT
+    CKF.flnorb='orb_'
+    CKF.flnerp='erp_'
+    CKF.flnpos='pos_'//TRIM(CKF.port)
+    CKF.flnrck='rck_'//TRIM(CKF.port)
+    CKF.flncck='cck_'//TRIM(CKF.port)
+    CKF.flnztd='ztd_'//TRIM(CKF.port)
+    CKF.flnres='res_'//TRIM(CKF.port)
+    CKF.flnamb='amb_'//TRIM(CKF.port)
+    CKF.flnfnl='fcb_'//TRIM(CKF.port)
+    CKF.flnmw='ifcb_'//TRIM(CKF.port)
+    CKF.flnion='ion_'//TRIM(CKF.port)
+
+    CALL pth_orbit_null(CKF.flnorb,CKF.flnerp)
+  END IF
+
+! THE SAMPLING RATE
+  msg='Interval'
+  key=findkey(lfncfg,msg,' ')
+  IF (key(1:5) .EQ. 'EMPTY') GOTO 100
+  READ(key,*,ERR=200) CKF.dintv
+
+! ZTD MODEL
+  msg='ZTD model'
+  key=findkey(lfncfg,msg,' ')
+  IF (key(1:5) .EQ. 'EMPTY') GOTO 100
+  CKF.ztdmod=TRIM(key)
+
+! ZTD GRADIENT MODEL
+  msg='ZTD Gradient'
+  key=findkey(lfncfg,msg,' ')
+  IF (key(1:5) .EQ. 'EMPTY') THEN
+    CKF.grdmod='NONE'
+  ELSE
+    CKF.grdmod=TRIM(key)
+  END IF
+
+! Ionosphere model
+  msg='ION model'
+  key=findkey(lfncfg,msg,' ')
+  IF (key(1:5) .EQ. 'EMPTY') THEN
+    CKF.ionmod='NONE'
+  ELSE
+    CKF.ionmod=TRIM(key)
+  END IF
+
+! PPPRTK constrians
+  IF (CKF%ionmod(1:3).EQ.'FIX' .OR. CKF%ztdmod(1:3).EQ.'FIX') THEN
+    msg='PPPRTK constrians'
+    key=findkey(lfncfg,msg,' ')
+    IF (key(1:5) .EQ. 'EMPTY') GOTO 100
+    READ(key,*,ERR=200) CKF%ionConstrians,CKF%ztdConstrians
+  END IF
+
+! GIM for ION
+  IF (TRIM(CKF.ionmod) .EQ. 'GIM') THEN !.OR. TRIM(CKF.ionmod) .EQ. 'SID') THEN
+    IF (CKF.lpost .EQ. .TRUE.) CALL get_file_name(.FALSE.,'ionex','CEN=whu',iy,im,id,ih,CKF.flnion)
+    INQUIRE(FILE=CKF.flnion, EXIST=lexist)
+    IF (lexist .EQ. .FALSE.) THEN
+      WRITE(OUTPUT_UNIT,'(A)') '%%%WARNING(get_ppp_args): '//TRIM(CKF.flnion)//' is not exist.'
+    END IF
+
+! JG: multi-thread needed for real-time
+    IF (lexist.EQ..TRUE.) THEN
+      CALL read_ionex(CKF.flnion,IOD)
+    END IF
+  END IF
+
+! PRE-PROCESSING
+  IF (CKF.llog .EQ. .FALSE.) THEN
+    msg='Real-time PP'
+    key=findkey(lfncfg,msg,' ')
+    IF (key(1:5) .EQ. 'EMPTY') GOTO 100
+    READ(key,*,ERR=200) CKF.gap,CKF.lg,CKF.lw
+  END IF
+  
+! CODE BIAS MODE
+  msg = 'Code bias mode'
+  key = findkey(lfncfg,msg,' ')
+  IF (INDEX(key,'cc2nocc') .EQ. 0  .AND. INDEX(key,'osb') .EQ. 0) THEN
+    CKF.codebias = 'NONE'
+    WRITE(OUTPUT_UNIT,'(A)') '%%%WARNING(get_ppp_args):  no correction for [Code bias mode], only cc2nocc or osb is permitted'    
+  ELSE
+    CKF.codebias = TRIM(key)
+  END IF
+  
+! IGG3
+  CKF.Igg3 = .TRUE.
+  msg = 'IGG3 yes or no'
+  key = findkey(lfncfg,msg,' ')
+  IF (key(1:5) .EQ. 'EMPTY') GOTO 100
+  IF (key(1:1) .EQ. 'N') CKF.Igg3 = .FALSE.
+
+! IGG3 K1 AND K2
+  IF (CKF.Igg3 .EQ. .TRUE.) THEN
+    msg = 'IGG3 decision'
+    key = findkey(lfncfg,msg,' ')
+    IF (key(1:5) .EQ. 'EMPTY') GOTO 100
+    READ(key,*,ERR=200) CKF.Igg3_k0,CKF.Igg3_k1
+  END IF
+
+! SNR MASK
+  msg = 'SNR limit'
+  key = findkey(lfncfg,msg,' ')
+  IF (key(1:5) .NE. 'EMPTY') READ(key,*,ERR=200) CKF.SnrLimit
+
+! DIA thershold
+  msg = 'DIA detect thershold'
+  key = findkey(lfncfg,msg,' ')
+  IF (key(1:5) .EQ. 'EMPTY') GOTO 100
+  READ(key,*,ERR=200) CKF.DiaSig
+!@ FOR PPP-RTK, THE UD IONONSPHER MAYBE INCLUDE SOME DATUM BIAS, IT WILL RESULT IN BIG ESIG, SO WE DO NOT PERFORME DIF [THIS IS CAN BE IMPROVED]
+  IF (CKF.ionmod(1:3) .EQ. 'FIX') CKF%DiaSig=10.d0
+
+! NLOS WHETHER DELETE: l:LOS AND 0:NLOS
+  CKF.nlos = .TRUE.
+  msg = 'NLos deletobs'
+  key = findkey(lfncfg,msg,' ')
+  IF (key(1:5) .EQ. 'EMPTY') GOTO 100
+  IF (key(1:1) .EQ. 'N') CKF.nlos = .FALSE.
+
+! NLOS FACTOR: SIGMA DOWN WIGHT COFFEICIENTS
+  IF (CKF.nlos .EQ. .FALSE.) THEN
+    msg = 'NLos factor'
+    key = findkey(lfncfg,msg,' ')
+    IF (key(1:5) .EQ. 'EMPTY') GOTO 100
+    READ(key,*,ERR=200) CKF.nlosfac
+  END IF
+
+! RECONVERGENCE
+  msg = 'Reconvergence time'
+  key = findkey(lfncfg,msg,' ')
+  IF (key(1:5) .EQ. 'EMPTY') GOTO 100
+  READ(key,*,ERR=200) CKF.ReConvTime
+
+! AMBIGUITY RESOLUTION FOR SITES
+  CKF.liar=.TRUE.
+  msg='Ambiguity fixing'
+  key=findkey(lfncfg,msg,' ')
+  IF (key(1:5) .EQ. 'EMPTY') GOTO 100
+  IF (key(1:1) .EQ. 'N') CKF.liar=.FALSE.
+
+  IF (CKF.liar) THEN
+! PHASE BIAS MODE: OSB OR FCB
+    msg = 'PhaseBias mode'
+    key = findkey(lfncfg,msg,' ')
+    IF (INDEX(key,'OSB').eq.0 .and. INDEX(key,'FCB').eq.0) THEN
+      WRITE(ERROR_UNIT,'(A)') '***ERROR(get_ppp_args): only OSB or FCB are accepted for [PhaseBias mode]'
+      CALL exit(1)
+    END IF
+    CKF.ArBiasMode = TRIM(key)
+! IF (CKF.ArBiasMode .eq. 'OSB') CKF.codebias = 'osb'
+
+    IF (CKF.ArBiasMode .eq. 'OSB') THEN
+! PHASEOSB MODE: UPD:30S ICLK:1-DAY MOSB: M-FREQUENCY
+      msg = 'PhaseOSB mode'
+      key = findkey(lfncfg,msg,' ')
+      IF (TRIM(key) .NE. 'UPD' .AND. TRIM(key) .NE. 'ICLK' .AND. TRIM(key) .NE. 'MOSB') THEN
+        WRITE(output_unit,'(A)') '%%%WARNING(get_ppp_args): for [PhaseOSB mode] in cfg, only UPD(epoch), ICLK(day) or MOSB(mfreq) is ok.'
+        CALL exit(1)
+      END IF
+      CKF.osbMode = TRIM(key)
+    END IF
+
+! PPPAR mode
+    msg = 'PPPAR mode'
+    key = findkey(lfncfg,msg,' ')
+    IF (key(1:2) .EQ. 'EMPTY') THEN
+      WRITE(output_unit,'(A)') '%%%ERROR(get_ppp_args):  Please check [PPPAR mode].'
+      CALL exit(1)
+    END IF
+    CKF.ArMode = TRIM(key)
+
+! MINUMUM PERIOD FOR A RESOLVABLE AMBIGUITY
+    msg='Minimum common time'
+    key=findkey(lfncfg,msg,' ')
+    IF (key(1:5) .EQ. 'EMPTY') GOTO 100
+    READ(key,*,ERR=200) CKF.minsec_common
+
+! CUTOFF ELEVATION FOR WL AND NL AMBIGUITY
+    msg='Cutoff elevation for AR'
+    key=findkey(lfncfg,msg,' ')
+    IF (key(1:5) .EQ. 'EMPTY') GOTO 100
+    READ(key,*,ERR=200) CKF.cutoff,CKF.wlcutoff
+
+! MAXIMUM DELETED/MINIMUM SAVED/VALIDATION TESTS FOR PARTIAL AMBIGUITY RESOLUTION
+    msg='Critical search NL'
+    key=findkey(lfncfg,msg,' ')
+    IF (key(1:5) .EQ. 'EMPTY') GOTO 100
+    READ(key,*,ERR=200) CKF.nl_maxdel,CKF.nl_minsav,CKF.nl_ratio,CKF.wl_ratio
+
+! BIAS FIXING FOR ROUNDING
+    msg='Widelane decision'
+    key=findkey(lfncfg,msg,' ')
+    IF (key(1:5) .EQ. 'EMPTY') GOTO 100
+    READ(key,*,ERR=200) CKF.wl_maxdev,CKF.wl_maxsig,CKF.wl_alpha
+
+  END IF
+
+! THE OBSERVATION TYPE USED
+  msg='Observation used'
+  key=findkey(lfncfg,msg,' ')
+  IF (key(1:5) .EQ. 'EMPTY') GOTO 100
+  IF (INDEX(key,'PHASE').EQ.0 .AND. INDEX(key,'CODE').EQ.0) THEN
+    WRITE(ERROR_UNIT,'(A)') '***ERROR(get_ppp_args): only PHASE or CODE are accepted'
+    CALL exit(1)
+  END IF
+  IF (INDEX(key,'PHASE').NE.0 .AND. INDEX(key,'CODE').EQ.0) THEN
+    WRITE(OUTPUT_UNIT,'(A)') '%%%WARNING(get_ppp_args): only PHASE are used'
+  END IF
+  IF (INDEX(key,'PHASE').EQ.0 .AND. INDEX(key,'CODE').NE.0) THEN
+    WRITE(OUTPUT_UNIT,'(A)') '%%%WARNING(get_ppp_args): only CODE are used'  
+    CKF.liar=.FALSE.
+  END IF
+  CKF.uobs=TRIM(key)
+
+! THE COMBINATION OF OBSERVATIONS
+  msg='Observation combination'
+  key=findkey(lfncfg,msg,' ')
+  IF (key(1:5) .EQ. 'EMPTY') GOTO 100
+  IF (INDEX(key,'IF').EQ.0 .AND. INDEX(key,'RAW').EQ.0 .AND. INDEX(key,'GRAPHIC').EQ.0 .AND. INDEX(key,'GFIF').EQ.0) THEN
+    WRITE(ERROR_UNIT,'(A)') '***ERROR(get_ppp_args): IF, RAW, GRAPHIC, and GFIF are accepted.'
+    CALL exit(1)
+  END IF
+  CKF.cobs=TRIM(key)
+
+  IF (CKF.cobs(1:4) .EQ. 'GFIF') THEN
+    CKF.grdmod='NONE'
+    CKF.ztdmod='NONE'
+  END IF
+
+  IF (CKF.cobs(1:2) .EQ. 'IF' .AND. CKF.liar) THEN
+! CORRET THE PCO FOR MW COMBINATITON
+    msg='MW pco corr for IF'
+    key=findkey(lfncfg,msg,' ')
+    IF (key(1:5) .EQ. 'EMPTY') GOTO 100
+    IF (key(1:1) .EQ. 'N') CKF.if_pco_corr = .FALSE.
+    IF (key(1:1) .EQ. 'Y') CKF.if_pco_corr = .TRUE.
+  END IF
+
+! FOR IF, GRAPHIC AND GFIF MODEL, THE IONONSPHERE DELAY IS NOT ESITIMATED
+  IF (INDEX(CKF.cobs,'IF').NE.0 .OR. INDEX(CKF.cobs,'GRAPHIC').NE.0 .OR. INDEX(CKF.cobs,'GFIF').NE.0) THEN
+    CKF.ionmod='NONE'
+  END IF
+
+! THE DIFFERENCE TYPE OF OBSERVATIONS
+  msg='Observation differenced'
+  key=findkey(lfncfg,msg,' ')
+  IF (key(1:5) .EQ. 'EMPTY') GOTO 100
+  IF (INDEX(key,'EPOCH').EQ.0 .AND. INDEX(key,'SIT').EQ.0 .AND. INDEX(key,'SAT').EQ.0 .AND. INDEX(key,'UD').EQ.0 .AND. INDEX(key,'DD').EQ.0) THEN
+    WRITE(ERROR_UNIT,'(A)') '***ERROR(get_ppp_args): UD, EPOCH, SIT or SAT are accepted for observation differenced.'
+    CALL exit(1)
+  END IF
+! FOR PPP, ONLY UD IS ACCEPTED
+  CKF.dobs='UD'
+
+! THE CARRIER-PHASE SMOOTH THE CODE
+  msg='Smooth code'
+  key=findkey(lfncfg,msg,' ')
+  IF (key(1:5).NE.'EMPTY' .AND. key(1:4).NE.'NONE') THEN
+    IF (INDEX(key,'PHASE').EQ.0 .AND. INDEX(key,'DOPPLER').EQ.0) THEN
+      WRITE(ERROR_UNIT,'(A)') '***ERROR(get_ppp_args): PHASE, DOPPLER are accepted for smooth code.'
+      CALL exit(1)
+    END IF
+    i=INDEX(key,':')
+    READ(key(i+1:),*) CKF.pscwnd ! UNIT: MINUTES
+    CKF.pscwnd=INT(CKF.pscwnd/CKF.dintv)
+    CKF.pscmod=TRIM(key)
+  ELSE
+    CKF.pscmod='NONE'
+  END IF
+  IF (INDEX(CKF.uobs,'PHASE') .EQ. 0) CKF.pscmod='NONE'
+
+! THE FREQUENCIES USED
+  msg='Frequency used'
+  key=findkey(lfncfg,msg,' ')
+  IF (key(1:5) .EQ. 'EMPTY') THEN
+    DO i=1, MAXSYS
+      SELECT CASE(SYS(i:i))
+        CASE('G','R','J')
+          CKF.nfreq(i)=2
+          CKF.freq(1,i)='L1'
+          CKF.freq(2,i)='L2'
+        CASE('E')
+          CKF.nfreq(i)=2
+          CKF.freq(1,i)='L1'
+          CKF.freq(2,i)='L5'
+        CASE('C')
+          CKF.nfreq(i)=2
+          CKF.freq(1,i)='L2'
+          CKF.freq(2,i)='L7'
+        CASE('I')
+          CKF.nfreq(i) = 2
+          CKF.freq(1,i) = 'L5'
+          CKF.freq(2,i) = 'L9'
+       END SELECT
+    END DO
+  END IF
+  
+  CKF.freq_used = TRIM(key)
+  CALL split_string(.TRUE.,key,' ',' ',' ',nsys,freq)
+  DO i=1, nsys
+    j=INDEX(freq(i),':')
+    isys=0
+    SELECT CASE(freq(i)(1:j-1))
+      CASE('GPS')
+        isys=INDEX(SYS,'G')
+      CASE('GLS')
+        isys=INDEX(SYS,'R')
+      CASE('GAL') 
+        isys=INDEX(SYS,'E')
+      CASE('BDS','CPS','CMS')
+        isys=INDEX(SYS,'C')
+      CASE('QZS')
+        isys=INDEX(SYS,'J')
+      CASE('IRS','INS')
+        isys=INDEX(SYS,'I')
+      CASE('LEO')
+        isys=INDEX(SYS,'L')
+      CASE('SEO')
+        isys=INDEX(SYS,'S')        
+      CASE DEFAULT
+        WRITE(OUTPUT_UNIT,'(A)') '###WARNING(get_ppp_args): unknown GNSS system '//freq(i)(1:j-1)
+    END SELECT
+    IF (isys .NE. 0) THEN
+      CALL split_string(.TRUE.,freq(i)(j+1:),' ',' ','_',CKF.nfreq(isys),CKF.freq(:,isys))
+      DO j=1, CKF%nfreq(isys)
+        SELECT CASE(TRIM(CKF.freq(j,isys)))
+          CASE('L1','G1','E1','B1C','B1c')
+            CKF.freq(j,isys) = 'L1'
+          CASE('L2','G2','E2','B1')
+            CKF.freq(j,isys) = 'L2'
+          CASE('L5','E5A','E5a','B2A','B2a')
+            CKF.freq(j,isys) = 'L5'
+          CASE('L6','E6','B3','LEX','B3C','B3c')
+            CKF.freq(j,isys) = 'L6'
+          CASE('L7','E5B','E5b','B2','B2B','B2b')
+            CKF.freq(j,isys) = 'L7'
+          CASE('L8','E5','Eab','B2C','B2c')      !B2a+b => L8
+            CKF.freq(j,isys) = 'L8'
+          CASE('L9','S')
+            CKF.freq(j,isys) = 'L9'
+        END SELECT
+        WRITE(1002,'((A),1X,A1,2X,I2,2X,I2,2X,A3)')'# ',SYS(isys:isys),isys,j,CKF.freq(j,isys)
+      END DO
+    END IF
+  END DO
+
+  IF (CKF.cobs(1:2) .EQ. 'IF') THEN
+    CKF.nfq=1
+  ELSE IF (CKF.cobs(1:3) .EQ. 'RAW') THEN
+    DO i=1, MAXSYS
+      CKF.nfq(i)=CKF.nfreq(i)
+    END DO
+  ELSE IF (CKF.cobs(1:7) .EQ. 'GRAPHIC') THEN
+    DO i=1, MAXSYS
+      CKF.nfq(i)=CKF.nfreq(i)
+    END DO
+  ELSE IF (CKF.cobs(1:4) .EQ. 'GFIF') THEN
+    CKF.nfq=1
+  END IF
+
+  CKF.lpod=.FALSE.
+
+  sigma=1.d0
+  sigmaqx=1.d0
+  msg = 'Station Sigma scale'
+  key = findkey(lfncfg,msg,'')
+  IF (key(1:5) .EQ. 'EMPTY') THEN
+    sigma=1.d0
+    sigmaqx=1.d0
+  ELSE
+    READ(key,*,ERR=200) sigma,sigmaqx
+  END IF
+
+! POST PROCESS RNX INFORMATION
+  IF (CKF.lpost .EQ. .TRUE.) THEN
+! STATION INFORMATION
+    msg='Rinex data directory'
+    key=findkey(lfncfg,msg,'')
+    IF(key(1:5) .EQ. 'EMPTY') GOTO 100
+    CALL get_file_name(.TRUE.,' ',' ',iy,im,id,ih,key)
+    j=LEN_TRIM(key)
+    IF (key(j:j) .NE. '/') THEN
+      key(j+1:j+1)='/'
+      j=j+1
+    END IF
+    rinex_path=key
+
+! BRDC DATA DIRECTORY
+    msg = 'BRDC data directory'
+    key = findkey(lfncfg,msg,'')
+    IF(key(1:5) .EQ. 'EMPTY') GOTO 100
+    CALL get_file_name (.TRUE., ' ', ' ', iy, im, id, ih, key)
+    j = LEN_TRIM(key)
+    IF (key(j:j) .NE. '/') THEN
+      key(j+1:j+1)='/'
+      j=j+1
+    ENDIF
+    brdc_path=key
+
+! BROADCAST MODEL CORRECTION: ONLY rnxp FILE IS ACCEPTED
+    neph=0
+    IF (CKF.ionmod(1:3).EQ.'BRD') THEN ! .OR. CKF.ionmod(1:3).EQ.'GIM') THEN
+      CALL get_file_name(.FALSE.,'rnxp','brd0=brdc',iy,im,id,ih,CKF.flnbrd)
+      INQUIRE(FILE=CKF.flnbrd, EXIST=lexist)
+      IF (lexist .EQ. .FALSE.) THEN
+        CKF.flnbrd=TRIM(brdc_path)//TRIM(CKF.flnbrd)
+        INQUIRE(FILE=CKF.flnbrd, EXIST=lexist)
+        IF (lexist .EQ. .FALSE.) THEN
+          WRITE(OUTPUT_UNIT,'(A)') '%%%WARNING(get_ppp_args): '//TRIM(CKF.flnbrd)//' is not exist.'
+        END IF
+      END IF
+      IF (lexist .EQ. .TRUE.) THEN
+        CALL read_rnxnav('M',CKF.flnbrd,CKF.mjd0+CKF.sod0/86400.d0,CKF.mjd1+CKF.sod1/86400.d0,BHD,neph,eph,ephg)
+      END IF
+
+      DO i=1, MAXSYS
+        IF (neph(i) .NE. 0) CYCLE
+
+        SELECT CASE(SYS(i:i))
+          CASE('G')
+            CALL get_file_name(.FALSE.,'rnxn','brd0=brdc',iy,im,id,ih,CKF.flnbrd)
+          CASE('R')
+            CALL get_file_name(.FALSE.,'rnxg','brd0=brdc',iy,im,id,ih,CKF.flnbrd)
+          CASE('E')
+            CALL get_file_name(.FALSE.,'rnxl','brd0=brdc',iy,im,id,ih,CKF.flnbrd)
+          CASE('C')
+            CALL get_file_name(.FALSE.,'rnxc','brd0=brdc',iy,im,id,ih,CKF.flnbrd)
+          CASE('S')
+            CALL get_file_name(.FALSE.,'rnxb','brd0=brdc',iy,im,id,ih,CKF.flnbrd)
+          CASE('J')
+            CALL get_file_name(.FALSE.,'rnxq','brd0=brdc',iy,im,id,ih,CKF.flnbrd)
+          CASE('I')
+            CALL get_file_name(.FALSE.,'rnxi','brd0=brdc',iy,im,id,ih,CKF.flnbrd)
+          CASE('L')
+          CASE DEFAULT
+            WRITE(OUTPUT_UNIT,'(A)') '%%%MESSAGE(get_ppp_args): unknown GNSS system '//SYS(i:i)
+        END SELECT
+
+        INQUIRE(FILE=CKF.flnbrd, EXIST=lexist)
+        IF (lexist .EQ. .FALSE.) THEN
+          CKF.flnbrd=TRIM(brdc_path)//TRIM(CKF.flnbrd)
+          INQUIRE(FILE=CKF.flnbrd, EXIST=lexist)
+          IF (lexist .EQ. .FALSE.) THEN
+            WRITE(OUTPUT_UNIT,'(A)') '%%%WARNING(get_ppp_args): '//TRIM(CKF.flnbrd)//' is not exist.'
+          END IF
+        END IF
+        IF (lexist .EQ. .TRUE.) THEN
+          CALL read_rnxnav(SYS(i:i),CKF.flnbrd,CKF.mjd0+CKF.sod0/86400.d0,CKF.mjd1+CKF.sod1/86400.d0,BHD,neph,eph,ephg)
+        END IF
+      END DO
+    END IF
+
+! STATION LOG INFORMATION
+    msg='Station LOG data directory'
+    key=findkey(lfncfg,msg,'')
+    IF(key(1:5) .EQ. 'EMPTY') GOTO 100
+    CALL get_file_name(.TRUE.,' ',' ',iy,im,id,ih,key)
+    j=LEN_TRIM(key)
+    IF (key(j:j) .NE. '/') THEN
+      key(j+1:j+1)='/'
+      j=j+1
+    END IF
+    log_path=key
+  END IF
+
+  cfg=f_tablefilename('object')
+  INQUIRE(FILE=cfg,EXIST=lexist)
+  IF (lexist .EQ. .FALSE.) THEN
+    WRITE(ERROR_UNIT,'(A)') '***ERROR(get_ppp_args): '//TRIM(cfg)//' is not exist'
+    CALL exit(1)
+  END IF
+
+  lfn=get_valid_unit(10)
+  OPEN(UNIT=lfn,FILE=cfg,STATUS='OLD',IOSTAT=ierr)
+  IF (ierr .NE. 0) THEN
+    WRITE(ERROR_UNIT,'(A)') '***ERROR(get_ppp_args): open '//TRIM(cfg)
+    CALL exit(1)
+  END IF
+
+  msg='+Satellite used GNSS'
+  key=findkey(lfn,msg,'')
+  IF(key(1:5) .EQ. 'EMPTY') GOTO 100
+  fmt=TRIM(key)
+
+  outpco=get_valid_unit(10)
+  OPEN(UNIT=outpco,file=CKF.flnpco)
+  WRITE(outpco,'(A)')'#PCO output for PPP five Freq-------I:E+N+U----------------------II:E+N+U---------------------III:E+N+U--------------------IIII:E+N+U-------------------IIIII:E+N+U' 
+
+  i=0
+  CKF.nprn=0
+  CKF.nsys=0
+  DO WHILE(INDEX(key,'-Satellite used GNSS') .NE. 1)
+    READ(lfn,'(A)',END=100) key
+    IF (key(1:1) .NE. ' ') CYCLE
+
+    i=i+1
+    IF (i .GE. MAXSAT) THEN
+      WRITE(OUTPUT_UNIT,'(A,I5)') '%%%MESSAGE(get_ppprt_args): Exceeding the MAXSAT ', MAXSAT
+      EXIT
+    END IF
+
+    READ(key,fmt,ERR=200) SAT(i).cprn,SAT(i).type,SAT(i).pcv,SAT(i).clk,SAT(i).dclk0, &
+       SAT(i).qclk, (SAT(i).dx0(j),j=1,MIN(21,MAXICS))
+    SAT(i).dx0(1:6)=SAT(i).dx0(1:6)*1.d-3 !m2km
+
+    CKF.cprn(i)=SAT(i).cprn
+    IF (INDEX(CKF.system,SAT(i).cprn(1:1)) .EQ. 0) THEN
+      CKF.nsys=CKF.nsys+1
+      CKF.system(CKF.nsys:CKF.nsys)=SAT(i).cprn(1:1)
+    END IF
+
+    isys=INDEX(SYS,SAT(i).cprn(1:1))
+    IF (isys.EQ.0 .OR. CKF.nfreq(isys).EQ.0) THEN
+      WRITE(ERROR_UNIT,'(A)') '***ERROR(get_ppp_args): no frequency information for system '//SYS(isys:isys)
+    END IF
+
+    IF (CKF.lpost .EQ. .TRUE.) THEN
+      CALL read_svnav(CKF.mjd0+CKF.sod0/86400.d0,SAT(i))
+
+      antnumb=SAT(i).cprn
+      CALL get_ant_ipt(SAT(i).cprn,CKF.nfreq,CKF.freq,CKF.mjd0+CKF.sod0/86400.d0,CKF.mjd1+CKF.sod1/86400.d0,&
+                             SAT(i).type,antnumb,SAT(i).iptatx,SAT(i).xyz)
+      WRITE(outpco,'((A),A4,2X,15(F8.6,2X))')'SAT PCO: ',SAT(i).cprn,SAT(i).xyz(1:3,1),SAT(i).xyz(1:3,2),SAT(i).xyz(1:3,3),SAT(i).xyz(1:3,4),SAT(i).xyz(1:3,5)
+    END IF
+    CALL get_freq(SAT(i),CKF.cobs,CKF.nfreq(isys),CKF.freq(:,isys))
+
+  END DO
+  CKF.nprn=i
+  IF (CKF.nprn .EQ. 0) THEN
+    WRITE(ERROR_UNIT,'(A)') '***ERROR(get_ppp_args): no satellites are selected'
+    CALL exit(1)
+  END IF
+
+! REVERIVER CLOCK REFERENCE SYSTEM: G-R-E-C, CHOOSE IT ACCORDING THE REAL OBSEVATION FROM DIFFERENT NAVAGATION SYSTEM
+  i=INDEX(CKF.system,'G') 
+  IF (i .EQ. 0) THEN
+    i=INDEX(CKF.system,'R')
+    IF (i .EQ. 0) THEN
+       i=INDEX(CKF.system,'E')
+       IF (i .EQ. 0) THEN
+          i=INDEX(CKF.system,'C')
+       END IF
+    END IF
+  END IF
+  IF (TRIM(inrefclk) .NE. '' .AND. INDEX(CKF%system,inrefclk).NE.0) THEN
+    i=INDEX(CKF%system,inrefclk)
+  END IF
+
+  IF (i .GT. 1) THEN
+    msg(1:1)=CKF.system(i:i)
+    CKF.system(i:i)=CKF.system(1:1)
+    CKF.system(1:1)=msg(1:1)
+  END IF
+  CKF.iref=INDEX(SYS,CKF.system(1:1))
+  WRITE(1002,'((A),A3)')'# REF system: ',SYS(CKF.iref:CKF.iref)
+
+! STATIONS
+  msg='+Station used'
+  key=findkey(lfn,msg,'')
+  IF (key(1:5) .EQ. 'EMPTY') GOTO 100
+  fmt=TRIM(key)
+
+  i=0
+  CKF.nsit=0
+  DO WHILE(key(1:1) .NE. '-')
+    READ(lfn,'(A)',END=100) key
+    IF(key(1:1) .NE.' ') CYCLE
+    IF(len_trim(key) .EQ. 0) CYCLE
+
+    i=i+1
+
+    IF (i .GE. MAXSIT) THEN
+      WRITE(OUTPUT_UNIT,'(A,I5)') '%%%MESSAGE(get_ppp_args): Exceeding the MAXSIT ', MAXSIT
+      EXIT
+    END IF
+
+    READ(key,fmt,ERR=200) SIT(i).name, SIT(i).skd, SIT(i).pcv, SIT(i).clk, &
+      (SIT(i).dclk0(j), SIT(i).qclk(j),j=1,MAXSYS), &
+      SIT(i).cutoff, SIT(i).map, SIT(i).dztd0, SIT(i).qztd, SIT(i).dgrd0, &
+      SIT(i).qgrd, SIT(i).dion0, SIT(i).qion, (SIT(i).sigr(j),SIT(i).sigp(j),j=1,MAXSYS),SIT(i).cprn
+    SIT(i).cutoff = SIT(i).cutoff*DEG2RAD
+    SIT(i).ileo=0
+
+
+    IF (CKF.lpost .EQ. .TRUE.) THEN
+
+      msg=lower_string(SIT(i).name)
+      SIT(i).lfnlog=0
+      CALL get_file_name(.FALSE.,'log','STANAM='//msg(1:4),iy,im,id,ih,SIT(i).logfile)
+      j=LEN_TRIM(log_path)
+      SIT(i).logfile=log_path(1:j)//SIT(i).logfile
+
+      key=rinex_path
+      j=LEN_TRIM(key)
+      CALL get_file_name(.FALSE.,'rnxo','STANAM='//msg(1:4),iy,im,id,ih,key(j+1:))
+      j=LEN_TRIM(key)
+
+! CORRECT THE CODE BIAS WITH CODE OSB
+      IF (CKF.codebias .EQ. 'osb') THEN
+        SIT(i).obsfile=TRIM(key)
+        INQUIRE(FILE=SIT(i).obsfile,EXIST=lexist)
+        IF(lexist .EQ. .FALSE.) THEN
+          WRITE(OUTPUT_UNIT,'(A)') '%%%MESSAGE(get_ppp_args): Observation file is not exist '//SIT(i).obsfile(1:j)
+          i=i-1
+        END IF
+! OTHER, CC2NONCC IS FIRST CHOICE
+      ELSE
+        SIT(i).obsfile=key(1:j)//'.new'
+        j=j+4
+        INQUIRE(FILE=SIT(i).obsfile,EXIST=lexist)
+        IF (lexist .EQ. .FALSE.) THEN
+          IF (CKF.codebias .EQ. 'cc2nocc') THEN
+            WRITE(OUTPUT_UNIT,'(A)') '%%%MESSAGE(get_ppp_args): codebias is cc2nocc, but *.new file is not exist '//TRIM(SIT(i).obsfile)
+          END IF
+          SIT(i).obsfile=TRIM(key)
+          INQUIRE(FILE=SIT(i).obsfile,EXIST=lexist)
+          IF(lexist .EQ. .FALSE.) THEN
+            WRITE(OUTPUT_UNIT,'(A)') '%%%MESSAGE(get_ppp_args): Observation file is not exist '//SIT(i).obsfile(1:j)
+            i=i-1
+          END IF
+        END IF
+      END IF
+
+    END IF
+
+    IF (CKF.cobs(1:4) .EQ. 'GFIF') THEN
+      SIT(i).pcv='AZEL'
+      SIT(i).clk='NON'
+      IF (SIT(i).skd(1:1) .EQ. 'D') THEN
+        SIT(i).skd='DF'
+      ELSE
+        SIT(i).skd='F'
+      END IF
+    END IF
+
+  END DO
+
+!@CMT BY XSY: 配置文件cfg文件没有GPS时，接收机PCO零值问题:根据cfg的频点便利计算PCO,如果没有GPS配置,添加即可
+  NFQ = CKF.nfreq
+  FQ = CKF.freq
+  IF (INDEX(CKF.system,'G') .EQ. 0) THEN
+    isys = INDEX(SYS,'G')
+    NFQ(isys) = 2
+    FQ(1,isys) = 'L1'
+    FQ(2,isys) = 'L2'
+    IF (CKF.nfreq(CKF.iref) .GE. 3) THEN
+      NFQ(isys) = 3
+      FQ(3,isys) = 'L5'
+    END IF
+  END IF
+
+!!  LEO: DD (dynamic), DK (kinematic), DF (fix), DR (reduced-dynamic)
+!! SITE: K (kinematic), S (static), F (fix), R (reference), V (kinematic velocity)
+  CKF.nsit=i
+  CKF.nleo=0
+  IF (CKF.lpost .EQ. .TRUE.) THEN
+    DO i=1, CKF.nsit
+      CALL read_siteinfo(SIT(i),CKF.mjd0,CKF.sod0,0.d0,ierr)
+      SIT(i).dx0=SIT(i).dx0*sigma
+      SIT(i).qx=SIT(i).qx*sigmaqx
+      IF (ierr .NE. 0) THEN
+        WRITE(OUTPUT_UNIT,'(A)') '%%%MESSAGE(get_ppp_args): no information for '//SIT(i).name
+        CALL exit(1)
+      ELSE
+        IF (SIT(i).skd(1:1) .NE. 'D') THEN
+          CALL xyzblh(SIT(i).x(1:3),1.d0,0.d0,0.d0,0.d0,0.d0,0.d0,SIT(i).geod)
+          CALL rot_enu2xyz(SIT(i).geod(1),SIT(i).geod(2),SIT(i).rot_l2f)
+          CALL oceanload_coef(SIT(i).geod(1),SIT(i).geod(2),SIT(i).olc)
+        END IF
+        CALL antnam(SIT(i).name,SIT(i).anttyp,antname,ierr)
+        antnumb=''
+! CALL get_ant_ipt('SITE',CKF.nfreq,CKF.freq,CKF.mjd0+CKF.sod0/86400.d0,CKF.mjd1+CKF.sod1/86400.d0,&
+!                    antname,antnumb,SIT(i).iptatx,SIT(i).enu)
+        CALL get_ant_ipt('SITE',NFQ,FQ,CKF.mjd0+CKF.sod0/86400.d0,CKF.mjd1+CKF.sod1/86400.d0,&
+                           antname,antnumb,SIT(i).iptatx,SIT(i).enu)                           
+!@CMT BY XSY: SIT PCO OUTPUT FOR CHECK
+        DO j=1,CKF%nsys
+          isys=INDEX(SYS,CKF%system(j:j))
+          DO k=1,CKF%nfreq(isys)
+            IF (COUNT(SIT(i)%enu(1:3,k,isys).EQ.0.D0).EQ.3) THEN
+              SIT(i)%enu(1:3,k,isys)=SIT(i)%enu(1:3,1,isys)
+            END IF
+          END DO
+          WRITE(outpco,'((A),2X,A4,2X,15(F8.6,2X))')'SIT PCO: '//CKF%system(j:j),SIT(i).name,&
+                        SIT(i).enu(1:3,1,isys),SIT(i).enu(1:3,2,isys),SIT(i).enu(1:3,3,isys),SIT(i).enu(1:3,4,isys),SIT(i).enu(1:3,5,isys)
+        END DO
+      END IF
+      IF (SIT(i).skd(1:1) .EQ. 'D') THEN
+        CKF.nleo=CKF.nleo+1
+        SIT(i).ileo=CKF.nleo
+        CKF.cprn(CKF.nprn+CKF.nleo)=SIT(i).cprn
+        SAT(CKF.nprn+CKF.nleo).cprn=SIT(i).cprn
+        CALL read_svnav(CKF.mjd0+CKF.sod0/86400.d0,SAT(CKF.nprn+CKF.nleo))
+
+        msg=lower_string(SAT(CKF.nprn+CKF.nleo).type)
+        CALL get_file_name(.FALSE.,'att','SATNAM='//TRIM(msg),iy,im,id,ih,SAT(CKF.nprn+CKF.nleo).flnatt)
+        INQUIRE(FILE=SAT(CKF.nprn+CKF.nleo).flnatt,EXIST=lexist)
+        IF (lexist .EQ. .FALSE.) THEN
+          WRITE(OUTPUT_UNIT,'(A)') '###MESSAGE(get_ppp_args): '//TRIM(SAT(CKF.nprn+CKF.nleo).flnatt)//' is not exist'
+        END IF
+
+        IF (SIT(i).skd(1:2).EQ.'DE') THEN
+          CALL get_file_name(.FALSE.,'acc','SATNAM='//TRIM(msg),iy,im,id,ih,SAT(CKF.nprn+CKF.nleo).flnacc)
+          INQUIRE(FILE=SAT(CKF.nprn+CKF.nleo).flnacc,EXIST=lexist)
+          IF (lexist .EQ. .FALSE.) THEN
+            WRITE(OUTPUT_UNIT,'(A)') '###MESSAGE(get_ppp_args): '//TRIM(SAT(CKF.nprn+CKF.nleo).flnacc)//' is not exist'
+          END IF
+
+          bracket='Force model '//TRIM(SAT(CKF.nprn+CKF.nleo).type)
+          k=0
+          DO l=1, MAXFORCE
+            j=LEN_TRIM(FORCE_ALL(l))
+            IF (j .EQ. 0) CYCLE
+            msg=findkey(lfncfg,FORCE_ALL(l)(1:j),bracket)
+            IF (msg(1:5).NE.'EMPTY' .AND. msg(1:4).NE.'NONE') THEN
+              k=k+1
+              IF (k .GT. MAXFORCE) THEN
+                WRITE(ERROR_UNIT,'(A)') '***ERROR(get_oi_args): too many forces'
+                CALL exit(1)
+              END IF
+              SAT(CKF.nprn+CKF.nleo).force_name(k) =TRIM(FORCE_ALL(l))
+              SAT(CKF.nprn+CKF.nleo).force_model(k)=TRIM(msg)
+            END IF
+          END DO
+          IF (k .EQ. 0) THEN
+            WRITE(ERROR_UNIT,'(A)') '***ERROR(get_oi_args): there are no active force models'
+            CALL exit(1)
+          END IF
+          SAT(CKF.nprn+CKF.nleo).nforce=k
+
+          SAT(CKF.nprn+CKF.nleo).npar=6
+          SAT(CKF.nprn+CKF.nleo).pname(1)='PXSAT'
+          SAT(CKF.nprn+CKF.nleo).pname(2)='PYSAT'
+          SAT(CKF.nprn+CKF.nleo).pname(3)='PZSAT'
+          SAT(CKF.nprn+CKF.nleo).pname(4)='VXSAT'
+          SAT(CKF.nprn+CKF.nleo).pname(5)='VYSAT'
+          SAT(CKF.nprn+CKF.nleo).pname(6)='VZSAT'
+          DO l=1, SAT(CKF.nprn+CKF.nleo).nforce
+            msg=TRIM(SAT(CKF.nprn+CKF.nleo).force_model(l))
+            CALL split_string(.TRUE., msg,'[', ']',' ',nword,word)
+            DO j=1, nword
+              IF (INDEX(SAT(CKF.nprn+CKF.nleo).force_name(l),'Customer').NE.0 .AND. INDEX(word(j),'_').EQ.0) THEN
+                word(j) = 'EMP_'//word(j)
+              END IF
+              lfound=.FALSE.
+              DO k=6, SAT(CKF.nprn+CKF.nleo).npar
+                IF (SAT(CKF.nprn+CKF.nleo).pname(k) .EQ. word(j)) THEN
+                  lfound=.TRUE.
+                  EXIT
+                END IF
+              END DO
+              IF (.NOT. lfound) THEN
+                SAT(CKF.nprn+CKF.nleo).npar=SAT(CKF.nprn+CKF.nleo).npar+1
+                IF (SAT(CKF.nprn+CKF.nleo).npar .GT. MAXICS) THEN
+                  WRITE(ERROR_UNIT,'(A)') ' ***ERROR(get_ppp_args): there are too many parameters for satellite '//SAT(i).cprn
+                  CALL exit(1)
+                END IF
+                SAT(CKF.nprn+CKF.nleo).pname(SAT(CKF.nprn+CKF.nleo).npar)=word(j)
+              END IF
+            END DO
+          END DO
+
+! Check it with parameter names
+          DO l=7, SAT(CKF.nprn+CKF.nleo).npar
+            lfound=.FALSE.
+            DO j=1, MAXORBPAR
+              IF (SAT(CKF.nprn+CKF.nleo).pname(l) .EQ. PARAM_ALL(j)) THEN
+                lfound=.TRUE.
+                EXIT
+              END IF
+            END DO
+            IF (.NOT. lfound) THEN
+              WRITE(ERROR_UNIT,'(A)') ' ***ERROR(get_ppp_args): unknown force model parameter '//TRIM(SAT(CKF.nprn+CKF.nleo).pname(l))
+              CALL exit(1)
+            END IF
+          END DO
+
+          CALL read_ics(CKF.flnpar,SAT(CKF.nprn+CKF.nleo),ICS)
+! find the right model parameter values
+          k=0
+          dt=CKF.mjd0+CKF.sod0/86400.d0
+          DO l=1, SAT(CKF.nprn+CKF.nleo).npar
+            j=0
+! Before the start time of the first one, use the first one
+            IF ((dt-ICS.ptime(1,k+1))*86400.d0 .LT. MAXWND) THEN
+              ii=k+1
+! After the end time of the last one, use the last one
+            ELSE IF((dt-ICS.ptime(2,k+ICS.npwc(l)))*86400.d0 .GT. -MAXWND) THEN
+              ii = k+ICS.npwc(l)
+! Search for the right one
+            ELSE
+              DO j=1, ICS.npwc(l)
+                IF (dt.GE.ICS.ptime(1,k+j) .AND. dt.LT.ICS.ptime(2,k+j) ) ii=k+j
+              END DO
+            END IF
+            SAT(CKF.nprn+CKF.nleo).x(l)=ICS.val(ii)
+            k=k+ICS.npwc(l)
+          END DO
+! SAT(CKF.nprn+CKF.nleo).x(1:6)=SAT(CKF.nprn+CKF.nleo).x(1:6)*1.d3
+          DO j=1, 6
+            SAT(CKF.nprn+CKF.nleo).phi(6*(j-1)+j)=1.d0
+          END DO
+        END IF
+
+!! lsq
+        SAT(CKF.nprn+CKF.nleo).dx0(1:3)=10.d0
+        SAT(CKF.nprn+CKF.nleo).dx0(4:6)=1.d0
+        SAT(CKF.nprn+CKF.nleo).dx0(7:MAXICS)=1.d0
+!! relative loss constrain for LEO satellites, paticular for dynamic coefficients
+! SAT(CKF.nprn+CKF.nleo).dx0(1:6)=SIT(i).dx0(1:6)
+! SAT(CKF.nprn+CKF.nleo).dx0(7:MAXICS)=10.d0
+! SAT(CKF.nprn+CKF.nleo).qx(1:3)=SIT(i).qx(1)
+! SAT(CKF.nprn+CKF.nleo).qx(4:6)=SIT(i).qx(2)
+! SAT(CKF.nprn+CKF.nleo).qx(7:MAXICS)=SIT(i).qx(3)
+
+        IF (SIT(i).skd(1:2) .EQ. 'DK') THEN
+          SIT(i).qx=SIT(i).qx*sigma
+        END IF
+      END IF
+    END DO
+  END IF
+
+  CLOSE(lfn)
+  CLOSE(lfncfg)
+  CLOSE(outpco)  
+
+  RETURN
+
+100 CONTINUE
+  WRITE(ERROR_UNIT,'(A)') '***ERROR(get_ppp_args): find option '//TRIM(msg)//TRIM(key)
+  CALL exit(1)
+
+200 CONTINUE
+  WRITE(ERROR_UNIT,'(A)') '***ERROR(get_ppp_args): read option '//TRIM(msg)//TRIM(key)
+  CALL exit(1)
+
+END SUBROUTINE

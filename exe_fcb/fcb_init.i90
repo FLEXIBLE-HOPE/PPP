@@ -1,0 +1,297 @@
+# 1 "/home/xfd/data/PPP/src/exe_fcb/fcb_init.f90"
+!
+!! purpose  : intialize PM & NM for primary filter
+!! parameter:
+!!    input : SCF   -- configuration information
+!!            SITE  -- station information
+!!            OB    -- rinex observation
+!!    output: NM,PM -- information matrix & parameters
+!! author   : Geng J
+!! created  : Nov. 10, 2007
+!
+
+SUBROUTINE fcb_init(isit,CKF,SAT,SIT,OB,PM,NM)
+!!
+!*
+USE info
+USE ckdctrl
+USE station
+USE satellite
+USE observation
+USE ISO_FORTRAN_ENV
+IMPLICIT NONE
+
+!*
+! The arguments
+!!-------------------
+INTEGER(IT) :: isit
+TYPE(CKDCFG) :: CKF
+TYPE(SATE) :: SAT(1:*)
+TYPE(SITE) :: SIT
+TYPE(RNXOBS) :: OB
+TYPE(INFM) :: NM
+TYPE(PRMT) :: PM(1:*)
+
+!*
+! The local variables
+!!------------------------
+  INTEGER(IT) :: i,j,l,ip,ic,isat,ipar,idx
+  INTEGER(IT) :: ifreq,minut,isys
+  CHARACTER(LEN=3) xyz
+  CHARACTER(LEN=2) ns
+
+  DATA xyz,ns /'XYZ','NS'/
+  SAVE xyz,ns
+
+!*
+! Start the exectuable code
+!!--------------------------
+
+!! initialization of parameters & information matrix
+  ip=0
+  ic=0
+
+!! station dependent
+  OB.npar=0
+
+!! receiver clock for ionosphere-free observable
+  DO i=1, CKF.nsys
+
+!! There must be GPS
+    IF (CKF.system(i:i).EQ.'R' .AND. CKF.iref.EQ.INDEX(SYS,'G')) CYCLE
+
+    isys=INDEX(SYS,CKF.system(i:i))
+
+    IF (CKF%lisb) THEN
+      IF (isys .EQ. CKF.iref) THEN
+        ip=ip+1
+        ipar=ip
+        PM(ipar).pname='RECCLK'//CKF.system(i:i)
+        PM(ipar).pcode(1)=isit
+        PM(ipar).pcode(2)=0
+        PM(ipar).ptime=0.d0
+! White noise
+!IF (SIT.qclk(isys) .EQ. 0.d0) THEN
+          PM(ipar).rw=1.d0/SIT.dclk0(isys)
+          PM(ipar).map=0.d0
+! Random walk
+!ELSE
+!  PM(ipar).map=1.d0
+!  PM(ipar).rw=1.d0/(SIT.qclk(isys)*DSQRT(CKF.dintv))
+!END IF
+        PM(ipar).zw=0.d0
+        PM(ipar).iobs=0
+        PM(ipar).xini=0.d0
+        PM(ipar).xcor=0.d0
+        PM(ipar).xest=0.d0
+        OB.npar=OB.npar+1
+        OB.pname(OB.npar) =PM(ipar).pname
+        DO isat=1, CKF.nprn
+          OB.ltog(OB.npar,isat)=ipar
+        END DO
+        NM.infs(ipar,ipar)=1.d0/SIT.dclk0(isys)
+      ELSE
+        ic=ic+1
+        ipar=NM.np+ic
+        PM(ipar).pname='RECCLK'//CKF.system(i:i)
+        PM(ipar).map=0.d0
+        PM(ipar).rw=0.d0
+
+        PM(ipar).xini =0.d0
+        OB.npar=OB.npar+1
+        OB.pname(OB.npar) =PM(ipar).pname
+        DO isat=1, CKF.nprn
+          OB.ltog(OB.npar,isat)=ipar
+        END DO
+        NM.infs(ipar,ipar)=1.d0/SIT.dclk0(isys)
+      END IF
+    ELSE
+      ip=ip+1
+      ipar=ip
+      PM(ipar).pname='RECCLK'//CKF.system(i:i)
+      PM(ipar).pcode(1)=isit
+      PM(ipar).pcode(2)=0
+      PM(ipar).ptime=0.d0
+! White noise
+!IF (SIT.qclk(isys) .EQ. 0.d0) THEN
+        PM(ipar).rw=1.d0/SIT.dclk0(isys)
+        PM(ipar).map=0.d0
+! Random walk
+!ELSE
+!  PM(ipar).map=1.d0
+!  PM(ipar).rw=1.d0/(SIT.qclk(isys)*DSQRT(CKF.dintv))
+!END IF
+      PM(ipar).zw=0.d0
+      PM(ipar).iobs=0
+      PM(ipar).xini=0.d0
+      PM(ipar).xcor=0.d0
+      PM(ipar).xest=0.d0
+      OB.npar=OB.npar+1
+      OB.pname(OB.npar) =PM(ipar).pname
+      DO isat=1, CKF.nprn
+        OB.ltog(OB.npar,isat)=ipar
+      END DO
+      NM.infs(ipar,ipar)=1.d0/SIT.dclk0(isys)      
+    END IF
+  END DO
+
+!! IFB parameters for GLONASS
+  IF (INDEX(CKF.system,'R').NE.0 .AND.  CKF.iref.EQ.INDEX(SYS,'G')) THEN
+    DO isat=1, CKF.nprn
+      IF (CKF.cprn(isat)(1:1) .EQ. 'R') THEN
+        ic=ic+1
+        ipar=NM.np+ic
+        WRITE(PM(ipar).pname,'(A9,SP,I2)') 'RECCLK'//CKF.cprn(isat),SAT(isat).ifreq
+        PM(ipar).map=0.d0
+        PM(ipar).rw=0.d0
+        PM(ipar).xini =0.d0
+        OB.npar=OB.npar+1
+        OB.pname(OB.npar)=PM(ipar).pname
+        OB.ltog(OB.npar,isat)=ipar
+        NM.infs(ipar,ipar)=1.d0/SIT.dclk0(INDEX(SYS,'R'))
+      END IF
+    END DO
+  ELSE IF (CKF.iref .EQ. INDEX(SYS,'R')) THEN
+    DO isat=1, CKF.nprn
+      IF (CKF.cprn(isat)(1:1) .EQ. 'R') THEN
+        IF (idx .EQ. 0) idx=isat
+        IF (isat .EQ. idx) CYCLE
+        ic=ic+1
+        ipar=NM.np+ic
+        WRITE(PM(ipar).pname,'(A9,SP,I2)') 'RECCLK'//CKF.cprn(isat),SAT(isat).ifreq
+        PM(ipar).map=0.d0
+        PM(ipar).rw=0.d0
+        PM(ipar).xini =0.d0
+        OB.npar=OB.npar+1
+        OB.pname(OB.npar)=PM(ipar).pname
+        OB.ltog(OB.npar,isat)=ipar
+        NM.infs(ipar,ipar)=1.d0/SIT.dclk0(INDEX(SYS,'R'))
+      END IF
+    END DO
+  END IF
+
+!@CMT BY XSY: [RECDCB] The third frequency code observation is a useless contribution because its' low wight
+  IF (CKF%lrecdcb) THEN 
+    IF (TRIM(CKF.cobs) .EQ. 'RAW') THEN
+      DO isat=1, CKF.nprn
+        isys=INDEX(SYS,CKF.cprn(isat)(1:1))
+        IF (CKF.nfq(isys) .GE. 3) THEN
+          DO i=3,CKF.nfq(isys)
+            ic=ic+1
+            ipar=NM.np+ic
+            WRITE(PM(ipar).pname,'(A7,I1,A3)') 'RECDCBL',i,CKF.cprn(isat)
+            PM(ipar).xini=0.d0
+            OB.npar=OB.npar+1
+            OB.pname(OB.npar)=PM(ipar).pname
+            OB.ltog(OB.npar,isat)=ipar
+            NM.infs(ipar,ipar)=1.d-4
+          END DO
+        END IF
+      END DO
+    END IF
+  END IF
+
+!! zenith atmospheric delay
+  IF (CKF%ztdmod(1:4).NE.'NONE' .AND. CKF%ztdmod(1:3).NE.'FIX' .AND. SIT%skd(1:1).NE.'D') THEN
+    ip=ip+1
+    ipar=ip
+    PM(ipar).pname=CKF.ztdmod
+    PM(ipar).pcode(1)=isit
+    PM(ipar).pcode(2)=0
+    PM(ipar).ptime=0.d0
+    i=INDEX(CKF.ztdmod,':')
+    IF (i .NE. 0) READ(CKF.ztdmod(i+1:),*) minut
+    IF (i .EQ. 0) THEN
+      PM(ipar).rw =1.d0/(SIT.qztd*DSQRT(CKF.dintv/3600.d0))
+    ELSE
+      PM(ipar).rw =1.d0/(SIT.qztd*DSQRT(minut/60.d0))
+    END IF
+    PM(ipar).map=1.d0
+    PM(ipar).zw=0.d0
+    PM(ipar).iobs=0 !np
+    PM(ipar).xini=0.d0
+    PM(ipar).xcor=0.d0
+    PM(ipar).xest=0.d0
+    OB.npar=OB.npar+1
+    OB.pname(OB.npar)=PM(ipar).pname
+    DO isat=1, CKF.nprn
+      OB.ltog(OB.npar,isat)=ipar
+    END DO
+    NM.infs(ipar,ipar)=1.d0/SIT.dztd0
+  END IF
+
+!! Gradient troposphere model
+  IF (CKF.grdmod(1:4).NE.'NONE' .AND. CKF.grdmod(1:4).NE.'FIX' .AND. SIT.skd(1:1).NE.'D') THEN
+    DO j=1, 2
+      ip=ip+1
+      ipar=ip
+      PM(ipar).pname=ns(j:j)//CKF.grdmod
+      PM(ipar).pcode(1)=isit
+      PM(ipar).pcode(2)=0
+      PM(ipar).ptime=0.d0
+      i=INDEX(CKF.grdmod,':')
+      IF (i .NE. 0) READ(CKF.grdmod(i+1:),*) minut
+      IF (i .EQ. 0) THEN
+        PM(ipar).rw =1.d0/(SIT.qgrd*DSQRT(CKF.dintv/3600.d0))
+      ELSE
+        PM(ipar).rw =1.d0/(SIT.qgrd*DSQRT(minut/60.d0))
+      END IF
+      PM(ipar).map=1.d0
+      PM(ipar).zw=0.d0
+      PM(ipar).iobs=0
+      PM(ipar).xini=0.d0
+      PM(ipar).xcor=0.d0
+      PM(ipar).xest=0.d0
+      OB.npar=OB.npar+1
+      OB.pname(OB.npar)=PM(ipar).pname
+      DO isat=1, CKF.nprn
+        OB.ltog(OB.npar,isat)=ipar
+      END DO
+      NM.infs(ipar,ipar)=1.d0/SIT.dgrd0
+    END DO
+  END IF
+
+!! ionoshperic delay
+  IF (CKF.cobs(1:3) .EQ. 'RAW') THEN
+    DO isat=1, CKF.nprn
+      ip=ip+1
+      ipar=ip
+      PM(ipar).pname='ION'//CKF.cprn(isat)
+      PM(ipar).map  =1.d0
+      PM(ipar).xini =0.d0
+! White noise
+      IF (SIT.qion .EQ. 0.d0) THEN
+        PM(ipar).rw=1.d0/SIT.dion0
+        PM(ipar).map=0.d0
+! Random walk
+      ELSE
+        PM(ipar).map=1.d0
+        PM(ipar).rw=1.d0/(SIT.qion*DSQRT(CKF.dintv))
+      END IF
+      OB.npar=OB.npar+1
+      OB.pname(OB.npar)=PM(ipar).pname
+      OB.ltog(OB.npar,isat)=ipar
+      NM.infs(ipar,ipar)=1.d0/SIT.dion0
+    END DO
+  END IF
+
+!! ambiguity (dynamic)
+  DO ifreq=1, MAXVAL(CKF.nfq)
+    OB.npar=OB.npar+1
+    WRITE(OB.pname(OB.npar),'(A4,I1)') 'AMBL',ifreq
+  END DO
+  DO isat=1, CKF.nprn
+!! revise kinematic PPP, no ambiguity parameters
+    isys=INDEX(SYS,CKF.cprn(isat)(1:1))
+    DO ifreq=1, CKF.nfq(isys)
+      OB.ltog(OB.npar-MAXVAL(CKF.nfq)+ifreq,isat)=0
+      IF (CKF.llog .EQ. .FALSE.) THEN
+        OB.lifamb(isat,ifreq,1)=0.d0
+        OB.lifamb(isat,ifreq,2)=0.d0
+      END IF      
+    END DO
+  END DO
+
+  RETURN
+
+END SUBROUTINE

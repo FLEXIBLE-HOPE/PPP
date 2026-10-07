@@ -1,0 +1,420 @@
+!*
+SUBROUTINE read_rnxobs(leo,lfn,jd0,sod0,nprn0,cprn0,nfreq,freqused,HD,OB,ierr)
+!*
+USE par
+USE const
+USE observation
+USE ISO_FORTRAN_ENV
+IMPLICIT NONE
+
+!*
+! The arguments
+!!----------------------
+INTEGER(IT) :: leo,lfn,jd0,nprn0,ierr,nfreq(MAXSYS)
+REAL(RL) :: sod0
+CHARACTER(LEN_PRN) :: cprn0(MAXSAT)
+CHARACTER(LEN_FREQ) :: freqused(MAXFREQ,MAXSYS)
+TYPE(RNXHEAD) :: HD
+TYPE(RNXOBS) :: OB
+
+  !*
+  ! The local variables
+  !!---------------------------------
+  INTEGER(IT) :: ioerr,iy,im,id,ih,imi,nprn
+  INTEGER(IT) :: iflag,i,j,l,k,nline,isat,iobs,ifreq,isys
+  REAL(RL) :: sec,ds,dt,obs(MAXOBSTYP),litrg
+  CHARACTER(LEN_STRING) :: line,fmt,msg
+  CHARACTER(LEN_PRN) :: cprn(MAXSAT)
+  CHARACTER(LEN_OBSTYPE) :: code
+
+  !*
+  ! The function called
+  !!----------------------------------
+  INTEGER(IT) :: pointer_string
+  INTEGER(IT) :: modified_julday
+
+  !*
+  ! Start the exectuable code
+  !!-----------------------------------
+      
+  ierr=0
+  line=' '
+  !! Maxmium differences between L1 and L2
+  !! Please becareful the therhold 50.d0, it is effeced by ionosphere
+  !! for LEO satellites, it is a bit too small, to be 500
+  litrg=50.d0
+  IF (leo .NE. 0) litrg=500.d0
+      
+10 READ(lfn,'(a)',END=200) line
+  IF (LEN_TRIM(line) .EQ. 0) GOTO 10
+    cprn=''
+    nprn=0
+    msg=''
+
+    !! number of satellite
+    IF(HD.ver .LT. 3.d0)THEN
+      READ(line(30:),'(i3)',iostat=ioerr) nprn
+    ELSE
+      READ(line(33:),'(i3)',iostat=ioerr) nprn
+    END IF
+
+    IF(ioerr .NE. 0)  THEN
+      msg = 'READ satellite number error.'
+    ELSE IF(nprn .GT. MAXSAT) THEN
+      msg = 'satellite number > MAX_SAT'
+    END IF
+    IF(LEN_TRIM(msg) .NE. 0) GOTO 100
+
+    IF(HD.ver .LT. 3.d0)THEN
+      READ(line(27:),'(i3)',iostat=ioerr) iflag
+    ELSE
+      READ(line(30:),'(i3)',iostat=ioerr) iflag
+    END IF
+    IF(ioerr .NE. 0) THEN
+      msg = 'read event flag error.'
+      GOTO 100
+    ELSE IF(iflag .GT. 1) THEN
+      IF(HD.ver .LT. 3.d0)THEN
+        msg = 'read internal antenna information error '
+        DO i=1, nprn
+          READ(lfn,iostat=ioerr,END=200,fmt='(a80)') line
+          IF(line(61:80) .eq. 'ANTENNA: DELTA H/E/N') THEN
+            READ (line,'(3f14.4)',err=100) HD.h,HD.e,HD.n
+          END IF
+        END DO
+        GOTO 10
+     END IF
+   END IF
+
+   !! initialization
+   OB.obs=0.d0
+
+   !! format of the time tag line
+   IF(HD.ver .LT. 3.d0)THEN
+     fmt='(5i3,f11.7,2i3,12a3)'
+     msg = 'read time & svn error.'
+     READ(line,fmt=fmt,err=100) iy,im,id,ih,imi,sec,iflag,nprn
+   ELSE
+     fmt='(2x,i4,4(1x,i2.2),f11.7,2x,i1,i3,6x,f15.12)'
+     msg = 'read time & svn error.'
+     READ(line,fmt=fmt,err=100) iy,im,id,ih,imi,sec,iflag,nprn,OB.dtrcv
+   END IF
+
+   IF(nprn .GT. MAXSAT) THEN
+     WRITE(ERROR_UNIT,'(A)') '***ERROR(read_rnxobs): nprn > MAXSAT'
+     CALL exit(1)
+   END IF
+   IF(HD.ver .LT. 3.d0)THEN
+     READ(line(69:80),'(f12.9)',iostat=ioerr) OB.dtrcv
+     IF(ioerr .NE. 0) OB.dtrcv = 0.d0
+     IF (MOD(nprn,12) .NE. 0) THEN
+       nline=INT(nprn/12)+1
+     ELSE
+       nline=INT(nprn/12)
+     END IF
+     IF (nprn .EQ. 0) nline=1
+
+     BACKSPACE(lfn)
+     DO i=1, nline
+       READ(lfn,'(A)',ERR=100) line
+       READ(line,'(32X,12A3)',err=100) (cprn(j),j=(i-1)*12+1,MIN(nprn,12*i))
+     END DO
+
+   END IF
+   !! check time
+   IF(im.LE.0 .OR. im.GT.12    &
+       .OR. id.LE.0 .OR. id.GT.31 .OR. ih.LT.0 .OR. ih.GE.24  &
+       .OR. imi.LT.0 .OR. imi.GT.60 .OR.sec .LT. 0.d0.OR.sec.GT.60.d0  &
+     ) THEN
+     msg = 'epoch time incorrect.'
+     GOTO 100
+   END IF
+   CALL yr2year(iy)
+
+   !! update start and stop time in rinex header
+   IF (hd.t0(1).EQ.0) THEN
+      hd.t0(1)=iy
+      hd.t0(2)=im
+      hd.t0(3)=id
+      hd.t0(4)=ih
+      hd.t0(5)=imi
+      hd.t0(6)=nint(sec)
+   END IF
+   hd.t1(1)=iy
+   hd.t1(2)=im
+   hd.t1(3)=id
+   hd.t1(4)=ih
+   hd.t1(5)=imi
+   hd.t1(6)=nint(sec)
+
+   !! check on time tags. DO not change the requested time IF there is no data
+   ds=0.d0
+   OB.jd=modified_julday(id,im,iy)
+   OB.tsec=ih*3600.d0 + imi*60.d0 + sec
+   IF(jd0.ne.0) THEN
+     ds=(jd0-OB.jd)*86400.d0 + (sod0-OB.tsec)
+     IF(ds .LT. -MAXWND) THEN
+       OB.jd=jd0
+       OB.tsec=sod0
+       IF(HD.ver.LT.3.d0)THEN
+
+         IF (MOD(nprn,12) .NE. 0) THEN
+           nline=INT(nprn/12)+1
+         ELSE
+           nline=INT(nprn/12)
+         END IF
+         IF (nprn .eq. 0) nline=1
+            
+         DO i =1, nline
+           BACKSPACE lfn
+         END DO
+       ELSE
+         BACKSPACE lfn
+       END IF
+       OB.nprn=0
+       RETURN
+     ELSE IF(ds .GT. MAXWND) THEN
+       nline = nprn
+       IF(HD.ver .LT. 3.d0)THEN
+         IF (MOD(HD.nobstype(1),5) .NE. 0) THEN
+           nline=nprn*(INT(HD.nobstype(1)/5)+1)
+         ELSE
+           nline=nprn*(INT(HD.nobstype(1)/5))
+         END IF
+       END IF
+       DO i=1,nline
+         READ(lfn,'(a)',END=100) line
+       END DO
+       GOTO 10
+     END IF
+   END IF
+
+   IF(HD.ver .LT. 3.d0)THEN
+     DO i=1, nprn
+       IF(cprn(i)(1:1) .EQ.' ') cprn(i)(1:1)='G'
+       IF(cprn(i)(2:2) .EQ.' ') cprn(i)(2:2)='0'
+     END DO
+
+     DO i=1, nprn
+
+       IF (MOD(HD.nobstype(1),5) .NE. 0) THEN
+         l = INT(HD.nobstype(1)/5)+1
+       ELSE
+         l = INT(HD.nobstype(1)/5)
+       END IF
+
+       DO k=1, l
+         READ(lfn,err=100,END=200,fmt='(A)') line
+         READ(line,fmt='(5(f14.3,2X))',ERR=100) (obs(j),j=(k-1)*5+1,MIN(HD.nobstype(1),5*k))
+       END DO
+
+400    isat=0
+       IF(nprn0 .GT. 0) THEN
+         isat=pointer_string(nprn0,cprn0,cprn(i))
+       ELSE
+         isat=i
+       END IF
+
+      IF(isat .NE. 0) THEN
+
+        isys=INDEX(SYS,cprn(i)(1:1))
+
+        DO ifreq=1, nfreq(isys)
+
+          WRITE(code,'(A1,A1)') 'P',freqused(ifreq,isys)(2:2)
+          k = pointer_string(HD.nobstype(isys), HD.obstype(:,isys), TRIM(code))
+          IF (k .NE. 0) THEN
+            IF (obs(k) .GT. 1.d0 ) THEN
+              OB.obs(isat,MAXFREQ+ifreq) = obs(k)
+              OB.fob(isat,MAXFREQ+ifreq) = 'C'//freqused(ifreq,isys)(2:2)//'P'
+            END IF
+          END IF
+
+          IF (OB.obs(isat,MAXFREQ+ifreq) .EQ. 0.d0) THEN
+            ! Please must sure the C observations are converted to P observations
+            WRITE(code,'(A1,A1)') 'C',freqused(ifreq,isys)(2:2)
+            k = pointer_string(HD.nobstype(isys), HD.obstype(:,isys), TRIM(code))
+            IF (k .NE. 0) THEN
+              IF (obs(k) .GT. 1.d0 ) THEN
+                OB.obs(isat,MAXFREQ+ifreq) = obs(k)
+                OB.fob(isat,MAXFREQ+ifreq) = 'C'//freqused(ifreq,isys)(2:2)//'C'
+              END IF
+            END IF
+          END IF
+
+          WRITE(code,'(A1,A1)') 'L',freqused(ifreq,isys)(2:2)
+          k = pointer_string(HD.nobstype(isys), HD.obstype(:,isys), TRIM(code))
+          IF (k .NE. 0) THEN
+            IF (DABS(obs(k)) .GT. 1.d0 ) THEN
+              OB.obs(isat,ifreq) = obs(k)
+              OB.fob(isat,ifreq) = 'L'//freqused(ifreq,isys)(2:2)//'P'
+            END IF
+          END IF
+        END DO
+
+        IF (COUNT(OB.obs(isat,1:2*MAXFREQ).NE.0.D0) .LT. 2*nfreq(isys)) THEN
+          OB.obs(isat,1:2*MAXFREQ) = 0.D0
+          OB.fob(isat,1:2*MAXFREQ) = ' '
+        END IF
+
+        IF (nfreq(isys).GE.2 .AND. (DABS(OB.obs(isat,MAXFREQ+1)-OB.obs(isat,MAXFREQ+2)).GT.litrg)) THEN
+          OB.obs(isat,1:2*MAXFREQ) = 0.D0
+          OB.fob(isat,1:2*MAXFREQ) = ' '
+        END IF
+
+      END IF
+    END DO
+  END IF
+
+  IF(HD.ver .GE. 3.d0)THEN
+    isat=0
+    cprn(:)=''
+    DO i=1,nprn
+      READ (lfn,err=100,END=200,fmt='(a)') line
+
+      isys = index(SYS,line(1:1))
+      IF(isys .EQ. 0) CYCLE
+
+      IF(nprn0 .GT. 0) THEN
+        IF (line(2:2) .EQ. ' ') line(2:2)='0'
+        isat=pointer_string(nprn0,cprn0,line(1:3))
+        IF (isat .EQ. 0) CYCLE
+      ELSE
+        isat=isat+1
+        cprn(isat)=line(1:3)
+      END IF
+
+      READ(line,'(3x,30(f14.3,2X))',ERR=100) (obs(k),k=1,HD.nobstype(isys))
+      IF(isat .NE. 0) THEN
+
+        !! only the first type observation for the frequency has been read
+        DO ifreq=1, nfreq(isys)
+        !  WRITE(code,'(A1,A1,A1)') 'C',freqused(ifreq,isys)(2:2)
+        !  DO k=1, HD.nobstype(isys)
+        !    IF (HD.obstype(k,isys)(1:2) .EQ. code(1:2)) THEN
+        !      code=HD.obstype(k,isys)
+        !      EXIT
+        !    END IF
+        !  END DO
+        !  IF (k .GT. HD.nobstype(isys)) CYCLE
+        !  IF (obs(k) .GT. 1.d0 ) THEN
+        !    OB.obs(isat,MAXFREQ+ifreq)=obs(k)
+        !    OB.fob(isat,MAXFREQ+ifreq)=code
+        !  END IF
+
+        !  code(1:1)='L'
+        !  DO k=1, HD.nobstype(isys)
+        !    IF (HD.obstype(k,isys)(1:3) .EQ. code(1:3)) EXIT
+        !  END DO
+        !  IF (k .GT. HD.nobstype(isys)) CYCLE
+        !  IF (DABS(obs(k)) .GT. 1.d0 ) THEN
+        !    OB.obs(isat,ifreq)=obs(k)
+        !    OB.fob(isat,ifreq)=code
+        !  END IF
+
+          IF (LEN_TRIM(HD.usetype(ifreq,isys)) .EQ. 0) THEN
+            DO iobs=1, LEN(OBSTYPE)
+              WRITE(code,'(A1,A1,A1)') 'C',freqused(ifreq,isys)(2:2),OBSTYPE(iobs:iobs)
+              k = pointer_string(HD.nobstype(isys), HD.obstype(:,isys), TRIM(code))
+              IF (k .NE. 0) THEN
+                IF (obs(k) .GT. 1.d0 ) THEN
+                  OB.obs(isat,MAXFREQ+ifreq)=obs(k)
+                  OB.fob(isat,MAXFREQ+ifreq)=code
+                END IF
+              END IF
+
+              WRITE(code,'(A1,A1,A1)') 'L',freqused(ifreq,isys)(2:2),OBSTYPE(iobs:iobs)
+              k = pointer_string(HD.nobstype(isys), HD.obstype(:,isys), TRIM(code))
+              IF (k .NE. 0) THEN
+                IF (DABS(obs(k)) .GT. 1.d0 ) THEN
+                  OB.obs(isat,ifreq)=obs(k)
+                  OB.fob(isat,ifreq)=code
+                END IF
+              END IF
+
+              WRITE(code,'(A1,A1,A1)') 'S',freqused(ifreq,isys)(2:2),OBSTYPE(iobs:iobs)
+              k = pointer_string(HD.nobstype(isys), HD.obstype(:,isys), TRIM(code))
+              IF (k .NE. 0) THEN
+                IF (obs(k) .LT. 27.d0) THEN
+                  OB.obs(isat,1:2*MAXFREQ) = 0.D0
+                  OB.fob(isat,1:2*MAXFREQ) = ' '
+                END IF
+              END IF
+
+              IF (OB.obs(isat,MAXFREQ+ifreq).NE.0.D0 .AND. OB.obs(isat,ifreq).NE.0.D0) EXIT
+            END DO
+            IF (iobs .LE. LEN(OBSTYPE)) HD.usetype(ifreq,isys)=OBSTYPE(iobs:iobs)
+          ELSE
+            WRITE(code,'(A1,A1,A1)') 'C',freqused(ifreq,isys)(2:2),HD.usetype(ifreq,isys)
+            k = pointer_string(HD.nobstype(isys), HD.obstype(:,isys), TRIM(code))
+            IF (k .NE. 0) THEN
+              IF (obs(k) .GT. 1.d0 ) THEN
+                OB.obs(isat,MAXFREQ+ifreq)=obs(k)
+                OB.fob(isat,MAXFREQ+ifreq)=code
+              END IF
+            END IF
+
+            WRITE(code,'(A1,A1,A1)') 'L',freqused(ifreq,isys)(2:2),HD.usetype(ifreq,isys)
+            k = pointer_string(HD.nobstype(isys), HD.obstype(:,isys), TRIM(code))
+            IF (k .NE. 0) THEN
+              IF (DABS(obs(k)) .GT. 1.d0 ) THEN
+                OB.obs(isat,ifreq)=obs(k)
+                OB.fob(isat,ifreq)=code
+              END IF
+            END IF
+
+            WRITE(code,'(A1,A1,A1)') 'S',freqused(ifreq,isys)(2:2),HD.usetype(ifreq,isys)
+            k = pointer_string(HD.nobstype(isys), HD.obstype(:,isys), TRIM(code))
+            IF (k .NE. 0) THEN
+              IF (obs(k) .LT. 28.d0) THEN
+                OB.obs(isat,1:2*MAXFREQ) = 0.D0
+                OB.fob(isat,1:2*MAXFREQ) = ' '
+              END IF
+            END IF
+          END IF
+        END DO
+
+        IF (COUNT(OB.obs(isat,1:2*MAXFREQ).NE.0.D0) .LT. 2*nfreq(isys)) THEN
+          OB.obs(isat,1:2*MAXFREQ) = 0.D0
+          OB.fob(isat,1:2*MAXFREQ) = ' '
+        END IF
+
+        !! Please becareful the therhold 50.d0, it is effeced by ionosphere
+        IF (nfreq(isys).GE.2 .AND. (DABS(OB.obs(isat,MAXFREQ+1)-OB.obs(isat,MAXFREQ+2)).GT.litrg)) THEN
+          OB.obs(isat,1:2*MAXFREQ) = 0.D0
+          OB.fob(isat,1:2*MAXFREQ) = ' '
+        END IF
+
+      END IF
+    END DO
+  END IF
+     
+  IF(nprn0 .EQ. 0) THEN
+    OB.nprn=nprn
+    DO i=1,nprn
+      OB.cprn(i)=cprn(i)
+    END DO
+  ELSE
+    OB.nprn=nprn0
+    DO i=1,nprn0
+      OB.cprn(i)=cprn0(i)
+    END DO
+  END IF
+
+  IF(ds .GT. MAXWND) GOTO 10
+
+  RETURN
+
+100 ierr=1
+    WRITE(OUTPUT_UNIT,'(A/A/A)') '***WARNING(read_rnxobs): read file', &
+                       '   line :'//TRIM(line), &
+                       '   msg  :'//TRIM(msg)
+  RETURN
+
+200 ierr=1
+    OB.obs=0.d0
+
+  RETURN
+
+END SUBROUTINE
+

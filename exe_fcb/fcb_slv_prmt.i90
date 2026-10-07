@@ -1,0 +1,95 @@
+# 1 "/home/xfd/data/PPP/src/exe_fcb/fcb_slv_prmt.f90"
+!
+!! purpose   : solve for parameter in SRIF
+!! parameters: SF -- filter
+!!             isol  = 1, parameter only else parameter and inversion of the SRI
+!! author    : Geng J
+!
+SUBROUTINE fcb_slv_prmt(PM,NM,infs)
+!!
+!*
+USE par
+USE info
+IMPLICIT NONE
+
+!*
+! The arguments
+!!-------------------
+TYPE(INFM) :: NM
+TYPE(PRMT) :: PM(1:*)
+REAL(RL) :: infs(1:*)
+
+
+!*
+! The local variables
+!!----------------------
+  INTEGER(IT) :: i,j,k,isol,ierr
+  REAL(RL) :: dummy
+  INTEGER(IT), POINTER :: idx(:)
+  REAL(RL), POINTER :: dx(:)
+
+!*
+! Start the exectuable code
+!!-----------------------------
+
+  isol=2
+!! parameter only, backward substitution
+  IF (isol .EQ. 1) THEN
+    DO i=NM.imtx,1,-1
+      dummy=infs(NM.iptx(NM.imtx+1)+i)
+      DO j=i+1,NM.imtx
+        dummy=dummy-infs(NM.iptx(j)+i)*PM(j).xcor
+      END DO
+      PM(i).xcor=dummy/infs(NM.iptx(i)+i)
+      PM(i).xest=PM(i).xini+PM(i).xcor
+      PM(i).xsig=0.d0
+    END DO
+
+  ELSE
+
+! cofactor matrix, invert information matrix
+    ALLOCATE(dx(NM.imtx*(NM.imtx+1)/2),stat=ierr)
+    ALLOCATE(idx(NM.imtx),stat=ierr)
+    DO i=1,NM.imtx
+      idx(i)=(i-1)*i/2
+    END DO
+    dx=0.d0
+    IF (PM(1).iobs .EQ. 0) THEN
+      dx(idx(1)+1)=0.d0
+    ELSE
+      dx(idx(1)+1)=1.d0/infs(NM.iptx(1)+1)
+    END IF
+    DO j=2,NM.imtx
+      IF (PM(j).iobs .EQ. 0) THEN
+        dx(idx(j)+j)=0.d0
+      ELSE
+        dx(idx(j)+j)=1.d0/infs(NM.iptx(j)+j)
+      END IF
+      DO k=1,j-1
+        DO i=k,j-1
+          dx(idx(j)+k)=dx(idx(j)+k)+dx(idx(i)+k)*infs(NM.iptx(j)+i)
+        END DO
+        dx(idx(j)+k)=-1.d0*dx(idx(j)+k)*dx(idx(j)+j)
+      END DO
+    END DO
+
+!! compute estimates & variance
+    DO i=1,NM.imtx
+      PM(i).xcor=0.d0
+      PM(i).xsig=0.d0
+      DO j=i,NM.imtx
+        PM(i).xcor=PM(i).xcor+dx(idx(j)+i)*infs(NM.iptx(NM.imtx+1)+j)
+        PM(i).xsig=PM(i).xsig+dx(idx(j)+i)**2
+      END DO
+      PM(i).xest=PM(i).xini+PM(i).xcor
+      PM(i).xsig=DSQRT(PM(i).xsig)*NM.esig
+!WRITE(*,'(I3,1X,A8,3F10.3)')i,PM(i).pname,PM(i).xini,PM(i).xcor,PM(i).xest
+    END DO
+    DEALLOCATE(dx)
+    DEALLOCATE(idx)
+
+  END IF
+
+  RETURN
+
+END SUBROUTINE

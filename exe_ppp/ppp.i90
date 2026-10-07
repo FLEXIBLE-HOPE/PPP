@@ -1,0 +1,1103 @@
+# 1 "/home/xfd/data/PPP/src/exe_ppp/ppp.f90"
+!*
+PROGRAM ppp
+!!
+!! PRECISE POINT POSITIONING (PPP) FOR MULTI-GNSS SYSTEMS (INCLUDING
+!! GPS, GLONASS, GALILEO, BEIDOU, QZSS, AND SO ON) WITH/WITHOUT INTEGER
+!! AMBIGUITY RESOLUTION IN REAL-TIME OR POST PROCESSING MODE BASED ON
+!! IONOSPHERE-FREE COMBINATION OR RAW OBSERVATLES
+!!
+!! FOR PPP-IAR, ONLY THE SYSTEM BASED ON CDMA (CODE DIVISION MULTIPLE
+!! ACCESS) IS SUPPORTED, AND GLONASS WITH HOMOGENEOUS RECEIVERS ARE
+!! ALSO SUPPORTED
+!!
+!! @ CMT BY XSY: 2025-03-18
+!!    SUPPORT MIX FREQUENCY PPP AND PPP-AR BUT THE BASIC DUAL-FREQUENCY CODE AND PHASE OBSERVATIONS MUST BE EXSIT
+!!    FOR IONOSPHERE-FREE COMBINATION, ONLY DUAL-FREQUENCY IS PERMEITED
+!!
+!*
+USE info
+USE ion
+USE brdeph
+USE ckdctrl
+USE station
+USE satellite
+USE ambiguity
+USE observation
+USE ISO_FORTRAN_ENV
+IMPLICIT NONE
+
+!*
+! THE LOCAL VARIABLES
+!!------------------------------
+TYPE(CKDCFG) :: CKF
+TYPE(SATE) :: SAT(MAXSAT)
+TYPE(SITE) :: SIT(MAXSIT)
+TYPE(BRDHEAD) :: BHD
+TYPE(IONEX) :: IOD
+TYPE(RNXOBS), POINTER :: OB(:)
+TYPE(RNXOBS), POINTER :: OBH(:)
+TYPE(RNXOBS), POINTER :: OBD(:) ! for epoch difference
+TYPE(RNXHEAD), POINTER :: HD(:)
+TYPE(INFM), POINTER :: NM(:)
+TYPE(PRMT), POINTER :: PM(:,:)
+TYPE(AMBT), POINTER :: AM(:,:)
+TYPE(SOL), POINTER :: SL(:)
+TYPE(INVM), POINTER :: QM(:)
+TYPE(FCB) :: UPD
+!2023-07-24 by xsy: for DIA
+TYPE(INFM), POINTER :: dia_NM(:)
+TYPE(AMBT), POINTER :: dia_AM(:,:)
+
+LOGICAL(LG) :: lfirst(MAXSIT),lfix
+INTEGER(IT) :: i,j,k,mjd,isat,iamb,ipar,isys,isit,iepo,ntim,DIA_nbias,leastnum
+INTEGER(IT) :: nbias,ibias(MAXSAT),minut,ierr,ifreq,nobs,ikin
+REAL(RL) :: dt,sod,orbtime,uhd(2),corx(5),ifcb(MAXSAT),sion(MAXSAT),Qxyz(3,3)
+!IGG3
+INTEGER(IT) :: igg3tim,nslip
+REAL(RL) :: kinstd(3)
+
+CHARACTER(LEN=4) :: cweek
+CHARACTER(LEN=1) :: cwkd, OUTFREQ
+CHARACTER(LEN=2) :: chour
+CHARACTER(LEN=5) :: camb
+
+DATA lfirst /MAXSIT*.TRUE./
+DATA lfix /.FALSE./
+
+!*
+! THE FUNCTIONS CALLED
+!!------------------------------
+  REAL(RL) :: timdif
+  INTEGER(IT) :: pointer_string
+  INTEGER(IT) :: get_valid_unit
+  CHARACTER(LEN_RUNTIM) :: run_tim
+
+!*
+! THE EXECTUABLE CODES
+!!-------------------------------
+
+! THE CONFIGURATION INFORMATION
+  CALL get_ppp_args(CKF,SIT,SAT,BHD,IOD)
+! CALL read_recfcb(CKF,UPD)
+
+  ALLOCATE(NM(CKF.nsit),STAT=ierr)
+  IF (ierr .NE. 0) GOTO 100
+  ALLOCATE(dia_NM(CKF.nsit),STAT=ierr)
+  IF (ierr .NE. 0) GOTO 100
+
+  ALLOCATE(OB(CKF.nsit),STAT=ierr)
+  IF (ierr .NE. 0) GOTO 100
+  ALLOCATE(OBD(CKF.nsit),STAT=ierr)
+  IF (ierr .NE. 0) GOTO 100
+
+  ALLOCATE(OBH(CKF.nsit),STAT=ierr)
+  IF (ierr .NE. 0) GOTO 100
+
+  IF (CKF.lpost .EQ. .TRUE.) THEN
+    ALLOCATE(HD(CKF.nsit),STAT=ierr)
+    IF (ierr .NE. 0) GOTO 100
+  END IF
+
+!! count number of parameters
+  CALL ppp_cnt_prmt(CKF,SIT,SAT,NM)
+
+  DO isit=1, CKF.nsit
+! ZTD, GRD, receiver clock offsets, slant ionosphere delay, satellite dcb, ambiguity, phase and code observation
+    NM(isit).namb=MAXFREQ*MAXSAT
+    NM(isit).nmtx=NM(isit).imtx+NM(isit).namb+CKF.nprn*MAXFREQ+MAXFREQ
+    ALLOCATE(NM(isit).iptx(NM(isit).nmtx),STAT=ierr)
+    IF (ierr .NE. 0) GOTO 100
+    DO i=1, NM(isit).nmtx
+      NM(isit).iptx(i)=(i-1)*NM(isit).nmtx
+    END DO
+    ALLOCATE(NM(isit).infs(NM(isit).nmtx,NM(isit).nmtx),STAT=ierr)
+    IF (ierr .NE. 0) GOTO 100
+    NM(isit).infs = 0.d0
+    ALLOCATE(NM(isit).co_infs(NM(isit).nmtx,NM(isit).nmtx),STAT=ierr)
+    IF (ierr .NE. 0) GOTO 100
+    NM(isit).co_infs = 0.d0
+
+    dia_NM(isit).namb=MAXFREQ*MAXSAT
+    dia_NM(isit).nmtx=dia_NM(isit).imtx+dia_NM(isit).namb+CKF.nprn*MAXFREQ+MAXFREQ
+    ALLOCATE(dia_NM(isit).iptx(dia_NM(isit).nmtx),STAT=ierr)
+    IF (ierr .NE. 0) GOTO 100
+    DO i=1, dia_NM(isit).nmtx
+      dia_NM(isit).iptx(i)=(i-1)*dia_NM(isit).nmtx
+    END DO
+    ALLOCATE(dia_NM(isit).infs(dia_NM(isit).nmtx,dia_NM(isit).nmtx),STAT=ierr)
+    IF (ierr .NE. 0) GOTO 100
+    dia_NM(isit).infs = 0.d0
+    ALLOCATE(dia_NM(isit).co_infs(dia_NM(isit).nmtx,dia_NM(isit).nmtx),STAT=ierr)
+    IF (ierr .NE. 0) GOTO 100
+    dia_NM(isit).co_infs = 0.d0
+  END DO
+
+!! The PARAMETERS excluding the ambiguties, including ZTD/GRD, receiver offsets, station coordinates, slant ionosphere delay, IFB for GLONASS, IFCB(nprn)
+  ALLOCATE(PM(CKF.nsys+1+2+3+2*CKF.nprn+(MAXFREQ-2)*MAXSAT,CKF.nsit),STAT=ierr)
+  IF (ierr .NE. 0) GOTO 100
+!! All of the AMBIGUITY be carefulle for the value, because some nonactive ambiguities are still saved in the array
+  ALLOCATE(AM(MAXFREQ*MAXSAT,CKF.nsit),STAT=ierr)
+  IF (ierr .NE. 0) GOTO 100
+  ALLOCATE(dia_AM(MAXFREQ*MAXSAT,CKF.nsit),STAT=ierr)
+  IF (ierr .NE. 0) GOTO 100
+!! Solutions
+  ALLOCATE(SL(CKF.nsit),STAT=ierr)
+  IF (ierr .NE. 0) GOTO 100
+
+!! UD AMBFIX
+  ALLOCATE(QM(CKF.nsit+1),STAT=ierr)
+  IF (ierr .NE. 0) GOTO 100
+
+  DO isit=1, CKF.nsit
+!! cofactor matrix for primary filter
+!! all parameters
+    QM(isit).nsiz=NM(isit).imtx+NM(isit).namb
+    ALLOCATE(QM(isit).invx(QM(isit).nsiz,QM(isit).nsiz),STAT=ierr)
+    IF (ierr .NE. 0) GOTO 100
+    ALLOCATE(QM(isit).idq(QM(isit).nsiz),STAT=ierr)
+    IF (ierr .NE. 0) GOTO 100
+    DO i=1,QM(isit).nsiz
+      QM(isit).idq(i)=(i-1)*QM(isit).nsiz
+    END DO
+
+    IF (CKF%lhisi) OB(isit)%lhisi=.TRUE.
+  END DO
+
+!! connection with local port
+  IF (CKF.ldebug .EQ..FALSE. .AND. CKF.lpost .EQ..FALSE.) THEN
+    CALL bridge(CKF.port,CKF.sock)
+! thread to pick up clocks and FCBs
+! NOTE: IFCB, ION should also be here
+    CALL pth_acqcf()
+  END IF
+
+  IF (CKF.lpost .EQ. .TRUE.) THEN
+    DO isit=1, CKF.nsit
+      SIT(isit).iunit=get_valid_unit(10)
+      OPEN(UNIT=SIT(isit).iunit,FILE=SIT(isit).obsfile)
+
+      CALL read_rnxobs_head(SIT(isit).iunit,HD(isit),ierr)
+      IF (ierr .NE. 0) THEN
+        WRITE(ERROR_UNIT,'(A)') '***ERROR(ppprt): Reading error '//TRIM(SIT(isit).obsfile)
+        CALL exit(1)
+      ELSE
+        IF (INDEX(CKF.uobs,'PHASE') .NE. 0) THEN
+          CALL read_log_file(0,CKF.mjd0,CKF.sod0,CKF.dintv,CKF.nprn,CKF.cprn,SIT(isit),OB(isit))
+        END IF
+      END IF
+      
+      IF (SIT(isit).skd(1:1) .NE. 'D') THEN
+        SL(isit).refx(1:3)=SIT(isit).x(1:3)
+        SL(isit).rot=SIT(isit).rot_l2f
+      END IF
+    END DO
+
+    CKF.mjd=CKF.mjd0
+    CKF.sod=CKF.sod0
+    iepo=0
+  END IF
+
+!! read stream and process epoch by epoch
+  orbtime=0.d0
+  DO WHILE(.TRUE.)
+
+!! synchronization of satellite clocks and measurements
+    IF (CKF.lpost .EQ. .FALSE.) THEN
+      CALL ppp_rd_rnxoi(CKF,SAT,SIT,OB,SL)
+    ELSE
+      iepo=iepo+1
+      CKF.nofixsat = ''
+
+      IF (CKF.liar .and. CKF.ArBiasMode .eq. 'OSB') THEN
+        IF (CKF.osbMode .EQ. 'UPD') THEN
+          CALL read_osb_upd(CKF,SAT)
+        ELSEIF (CKF%osbMode .EQ. 'MOSB') THEN
+          CALL read_osb_mosb(CKF,SAT)
+        END IF
+      END IF
+
+      DO isit=1, CKF.nsit
+        IF (SIT(isit).iunit .EQ. 0) CYCLE
+
+        CALL read_rnxobs(SIT(isit).ileo,SIT(isit).iunit,CKF.mjd,CKF.sod,CKF.nprn,CKF.cprn, &
+             CKF.nfreq,CKF.freq,HD(isit),OB(isit),ierr,CKF.SnrLimit)
+          
+!@ CMT BY SXY: for HISI device
+        IF (CKF%lhisi) CALL corr_hisi_2(CKF,OB(isit),SAT,SIT(isit),isit)
+
+        IF (CKF%flnsdb.NE.'') THEN
+          CALL corr_sdb_gxp(CKF,OB(isit),SAT,SIT(isit),HD(isit))
+        END IF
+
+        IF (CKF.liar .and. CKF.ArBiasMode .eq. 'OSB') THEN
+
+!! integer clock, one bias a day
+          IF (CKF.osbMode .EQ. 'ICLK') THEN
+            CALL corr_osb(CKF,OB(isit),SAT,SIT(isit),isit)
+            
+!! UPD mode, one by epoch
+          ELSEIF (CKF.osbMode .EQ. 'UPD') THEN
+            CALL corr_osb_upd(CKF,OB(isit),SAT,SIT(isit),isit)
+          
+!! Mult-frequency, PRIDE or WUMFIN
+          ELSEIF (CKF%osbMode .EQ. 'MOSB') THEN
+            CALL corr_osb_mosb(CKF,OB(isit),SAT,SIT(isit),isit)
+          
+          ELSE
+            WRITE(output_unit,'(A)') '%%%WARNING(ppp.f90): no suitable OSBfile is used, only UPD, ICLK or MOSB is ok for [PhaseOSB mode], please check the keyword: [PhaseOSB mode]'
+          END IF
+        END IF
+
+        IF (INDEX(TRIM(CKF.codebias),'osb').NE.0) THEN
+          IF ((CKF.liar .AND. CKF.ArBiasMode .EQ. 'FCB') .OR. (CKF.liar .EQ..FALSE.)) THEN
+            CALL corr_osb_code(CKF,OB(isit),SAT,SIT(isit),isit)
+          END IF
+        END IF
+
+! CALL corr_p1c1(CKF.mjd,CKF.sod,CKF.cprn,OB(isit).obs,OB(isit).fob)
+
+        IF (CKF.llog .EQ..TRUE. .AND. ierr.EQ.0 .AND. INDEX(CKF.uobs,'PHASE').NE.0) THEN
+          CALL read_log_file(iepo,CKF.mjd0,CKF.sod0,CKF.dintv,CKF.nprn,CKF.cprn,SIT(isit),OB(isit))
+        END IF
+      END DO
+    END IF
+
+    DO isit=1, CKF.nsit
+      IF (SIT(isit).iptatx .NE.0 .AND. lfirst(isit).EQ..TRUE.) THEN
+!! initialize information matrix
+        lfirst(isit) = .FALSE.
+        CALL ppp_init_pri(CKF,SAT,SIT(isit),OB(isit),NM(isit),PM(1,isit),isit)
+      END IF
+    END DO
+
+!! Please do not delect the following code
+!! reset the filter to invesitagte the initial time, it is different with reconvergence issues
+!! because the normal matrix is saved for reconvergence, but it is zero for initial convergence
+    IF ((INT((CKF.mjd-CKF.mjd0)*86400.0+CKF.sod-CKF.sod0).NE.0) .AND. MOD(INT((CKF.mjd-CKF.mjd0)*86400.0+CKF.sod-CKF.sod0),CKF.ReConvTime) .EQ. 0) THEN
+      CALL ppp_cnt_prmt(CKF,SIT,SAT,NM)
+      DO isit=1, CKF.nsit
+        NM(isit).infs=0.d0
+        NM(isit).esig=0.d0
+        CALL ppp_init_pri(CKF,SAT,SIT(isit),OB(isit),NM(isit),PM(1,isit),isit)
+        DO isat=1, CKF.nprn
+          IF (COUNT(OB(isit).obs(isat,1:2*MAXFREQ).NE.0.d0).GE.4) THEN
+            IF (CKF.llog .EQ. .TRUE.) THEN
+              isys=INDEX(SYS,CKF.cprn(isat)(1:1))
+              DO ifreq=1, CKF.nfq(isys)
+                WRITE(camb,'(A4,I1)') 'AMBL',ifreq
+                iamb =pointer_string(OB(isit).npar,OB(isit).pname,camb)
+                IF (OB(isit).omc(isat,ifreq) .EQ. 0.d0) CYCLE
+                ipar=OB(isit).ltog(iamb,isat)-NM(isit).npc
+                OB(isit).flag(isat,ifreq)=1
+                OB(isit).lifamb(isat,ifreq,1)=CKF.mjd+CKF.sod/86400.d0
+                OB(isit).lifamb(isat,ifreq,2)=AM(ipar,isit).ptime(2)
+                AM(ipar,isit).ptime(2)=CKF.mjd+CKF.sod/86400.d0
+              END DO
+            ELSE
+              OB(isit).flag(isat,1:MAXFREQ)=1
+            END IF
+          END IF
+        END DO
+      END DO
+      CKF.lamb=.FALSE.
+    END IF
+
+! NOTE: ifcb and ionosphere should be put here
+    IF (CKF.ldebug .EQ. .FALSE. .AND. CKF.lpost .EQ. .FALSE.) THEN
+      CALL ppp_rd_clkfcb(CKF.mjd,CKF.sod,CKF,SAT,UPD)
+    ELSE
+      CALL read_sat_clock(CKF.mjd,CKF.sod,CKF,SAT)
+!类似于读钟差,但是要区分测站,有bug
+      IF (CKF.ionmod(1:3) .EQ. 'FIX') THEN
+        CALL read_ion(CKF.mjd,CKF.sod,CKF,sion)
+!@ CMT BY XSY: HISI仿真电离层产品中断,并且不固定模糊度
+        IF (CKF%lockout(1).NE.0.D0 .AND. CKF%lockout(2).NE.0.D0) THEN
+          IF ((CKF%mjd+CKF%sod/86400.d0).GE.CKF%lockout(1) .AND. (CKF%mjd+CKF%sod/86400.d0).LT.CKF%lockout(2)) THEN
+            sion=0.d0
+! DO isat=1,CKF%nprn
+!   CKF.nofixsat=TRIM(CKF%nofixsat)//' '//CKF.cprn(isat)
+! END DO
+          END IF
+        END IF    
+      END IF
+      
+      IF (CKF.liar .and. CKF.ArBiasMode .eq. 'FCB') THEN
+        CALL dbg_rd_fcb('NL',CKF,UPD)
+        CALL dbg_rd_fcb('WL',CKF,UPD)
+        CALL dbg_rd_fcb('EWL',CKF,UPD)
+        CALL dbg_rd_fcb('EEWL',CKF,UPD)
+        CALL dbg_rd_fcb('HEWL',CKF,UPD)
+      END IF
+
+!@ CMT BY XSY: NEED TO NOTE FOR GPS L1/L5, AND SO ON...
+      ifcb=0.d0
+      IF (MAXVAL(CKF.nfq) .GE. 3) THEN
+!@ CMT BY XSY: only FCB ARmode need IFCB correction because OSB_UPD has included IFCB bias
+        IF (CKF.liar .and. CKF.ArBiasMode .eq. 'FCB') THEN
+!@ CMT BY XSY: unit m, its form is same as satellite clock
+          CALL read_ifcb(CKF.mjd,CKF.sod,CKF,ifcb)
+        END IF
+      END IF
+    END IF
+
+! ! Please do not remove the following code
+! ! Transformation UPD form L1 and L2 to WL and NL, and verse
+! DO isat=1, CKF.nprn
+!   IF (UPD.wfcb(isat).NE.10.d0 .AND. UPD.nfcb(isat).NE.10.d0) THEN
+!     ! For WL and NL to L1 and L2
+!     uhd(1)=UPD.nfcb(isat)-UPD.wfcb(isat)/(SAT(isat).g-1.d0)
+!     uhd(2)=UPD.nfcb(isat)-UPD.wfcb(isat)*SAT(isat).g/(SAT(isat).g-1.d0)
+!     UPD.wfcb(isat)=uhd(1)
+!     UPD.nfcb(isat)=uhd(2)
+!     ! ! from L1 and L2 to WL and NL
+!     ! uhd(1)=UPD.wfcb(isat)-UPD.nfcb(isat)
+!     ! uhd(2)=(UPD.wfcb(isat)*SAT(isat).g-UPD.nfcb(isat))/(SAT(isat).g-1.d0)
+!     ! UPD.wfcb(isat)=uhd(1)
+!     ! UPD.nfcb(isat)=uhd(2)
+!   END IF
+! END DO
+
+!! update predicted satellite orbits
+    IF (CKF.lpost .EQ. .FALSE.) THEN
+      IF (orbtime.EQ.0.d0 .OR. (CKF.mjd-orbtime)*86400.d0+CKF.sod .GT. 300.d0) THEN
+        CALL tim_tag(CKF.mjd,CKF.sod,cweek,cwkd,chour)
+        CALL pth_orbit(cweek,cwkd,chour,CKF.flnorb,CKF.flnerp)
+        orbtime=CKF.mjd+CKF.sod/86400.d0
+      END IF
+    END IF
+
+!! remove measurements without satellite clocks
+    DO isit=1, CKF.nsit
+      DO isat=1, CKF.nprn
+        IF (SAT(isat).sclock .EQ. 0.d0) THEN
+            OB(isit).obs(isat,1:2*MAXFREQ)=0.d0
+        END IF
+
+!@ CMT BY XSY: DELETE THE NLOS SATELLITE
+        IF (CKF.nlos .EQ. .TRUE.) THEN
+          IF (OB(isit).nlosflag(isat) .EQ. 0 .AND. OB(isit).obs(isat,MAXFREQ+1) .NE. 0.d0) THEN
+            OB(isit).obs(isat,1:2*MAXFREQ)=0.d0
+          END IF
+        END IF
+      END DO
+
+!! clear observations when orbit is unavailable
+      IF (CKF.lpost .EQ. .FALSE.) CALL pth_orbit_chk(CKF.flnorb,CKF.flnerp,CKF.nprn,OB(isit).obs)
+    END DO
+
+!! real-time pre-processing
+    IF (CKF.llog .EQ. .FALSE. .AND. INDEX(CKF.uobs,'PHASE').NE.0) THEN
+      CALL ppp_rt_prep(CKF,OB,SAT)
+    END IF
+    IF (INDEX(CKF.pscmod,'NO') .EQ. 0) THEN
+      DO isit=1, CKF.nsit
+        CALL phase_smooth_code(CKF,OB(isit),SAT,isit,CKF.pscwnd)
+      END DO
+    END IF
+
+    ntim=0
+!! add observation equations
+    DO isit=1, CKF.nsit
+
+200   CONTINUE
+      ntim=ntim+1
+
+!IF (lfirst(isit).EQ..TRUE.) CYCLE
+
+      NM(isit).nobs=0
+      NM(isit).esig=0.d0
+      NM(isit).weig=0.d0
+      NM(isit).ipob=0
+      NM(isit).resi=0.d0
+      OB(isit).elev=0.d0
+      OB(isit).omc=0.d0
+
+! !@ CMT BY XSY: 观测值失锁仿真
+! IF (CKF%lockout(1).NE.0.D0 .AND. CKF%lockout(2).NE.0.D0) THEN
+!   IF ((CKF%mjd+CKF%sod/86400.d0).GE.CKF%lockout(1) .AND. (CKF%mjd+CKF%sod/86400.d0).LT.CKF%lockout(2)) THEN
+!     OB(isit)%fob=''
+!     OB(isit)%obs=0.d0
+!   END IF
+! END IF
+
+      SIT(isit)%nsat=COUNT(OB(isit).obs(1:CKF.nprn,MAXFREQ+1).NE.0.d0)
+      IF (SIT(isit).skd(1:2) .EQ. 'DE') THEN
+        leastnum=0
+      ELSE
+        leastnum=4
+      END IF
+!@ CMT BY XSY: X/Y/Z/REC
+      IF (SIT(isit)%nsat .GE. leastnum) THEN
+
+!! prepare a priori position
+        ipar=pointer_string(OB(isit).npar,OB(isit).pname,'STAPX')
+        ipar=OB(isit).ltog(ipar,1)
+        IF (SIT(isit).skd(1:1).EQ.'K' .OR. SIT(isit).skd(1:2).EQ.'DK' .OR. SIT(isit).skd(1:1).EQ.'F') THEN
+! CALL read_kin_pos(CKF.flnkin,CKF.mjd,CKF.sod,SIT(isit).name,SIT(isit).x,ikin)
+          CALL read_kin_pos_lc(CKF.flnkin,CKF.mjd,CKF.sod,SIT(isit).name,SIT(isit).x,kinstd,ikin)
+          IF (ABS(SIT(isit).x(1)) .EQ. 0.d0 .OR. ABS(SIT(isit).x(2)) .EQ. 0.d0 .OR. ABS(SIT(isit).x(3)) .EQ. 0.d0 ) ikin=-1
+
+          IF (ikin .EQ. 0) THEN 
+            IF (ABS(kinstd(1)).NE.0.d0 .AND. ABS(kinstd(2)).NE.0.d0 .AND. ABS(kinstd(3)).NE.0.d0) THEN
+               CKF%sitConstrians(1:3)=ABS(kinstd(1:3))
+               WRITE(*,*)CKF%sitConstrians(1:3)
+            ELSE
+               CKF%sitConstrians(1:3)=50.d0
+            END IF
+            DO i=0, 2
+              PM(ipar+i,isit).xini=SIT(isit).x(i+1)
+            END DO
+          ELSE IF (ikin .EQ. -1) THEN
+            DO i=0, 2
+              SIT(isit).x(i+1)=PM(ipar+i,isit).xini
+            END DO
+          END IF
+          DO i=0, 2
+            PM(ipar+i,isit).ptime=OB(isit).jd+OB(isit).tsec/86400.d0
+          END DO
+          
+          IF (SIT(isit).skd(1:1) .NE. 'D' .AND. ikin .EQ. 0) THEN
+            CALL xyzblh(SIT(isit).x(1:3),1.d0,0.d0,0.d0,0.d0,0.d0,0.d0,SIT(isit).geod)
+            CALL rot_enu2xyz(SIT(isit).geod(1),SIT(isit).geod(2),SIT(isit).rot_l2f)
+            SL(isit).refx(1:3)=SIT(isit).x(1:3)
+            SL(isit).rot=SIT(isit).rot_l2f
+          END IF
+        ELSE IF (SIT(isit).skd(1:2) .EQ. 'DP') THEN
+          DO i=0, 2
+            PM(ipar+i,isit).ptime=OB(isit).jd+OB(isit).tsec/86400.d0
+          END DO
+        ELSE IF (SIT(isit).skd(1:2) .EQ. 'DE') THEN
+!! update the initial values for the orbit, velocity, and dynamic parameters
+          ipar=pointer_string(OB(isit).npar,OB(isit).pname,'PXSAT')
+          isat=CKF.nprn+SIT(isit).ileo
+          DO i=0, SAT(isat).npar-1
+            PM(ipar+i,isit).ptime=CKF.mjd+CKF.sod/86400.d0
+            PM(ipar+i,isit).xini=SAT(isat).x(i+1)
+          END DO
+! STATIC
+        ELSE
+          DO i=0, 2
+            IF (PM(ipar+i,isit).ptime(1) .EQ. 0.d0) THEN
+              PM(ipar+i,isit).ptime(1)=OB(isit).jd+OB(isit).tsec/86400.d0
+            END IF
+            PM(ipar+i,isit).ptime(2)=OB(isit).jd+OB(isit).tsec/86400.d0
+          END DO
+        END IF
+
+!! prepare a priori receiver clock correction (unit: m)
+! DO i=1, CKF.nsys
+!  ipar=pointer_string(OB(isit).npar,OB(isit).pname,'RECCLK'//CKF.system(i:i))
+!  isys=INDEX(SYS,CKF.system(i:i))
+!  SIT(isit).rclock(isys)=PM(OB(isit).ltog(ipar,1),isit).xini
+!  PM(OB(isit).ltog(ipar,1),isit).ptime=CKF.mjd+CKF.sod/86400.d0
+! END DO
+
+!! prepare a priori receiver clock correction (unit: m) and ISB
+        DO i=1, CKF.nsys
+          ipar=pointer_string(OB(isit).npar,OB(isit).pname,'RECCLK'//CKF.system(i:i))
+          IF (ipar .EQ. 0) CYCLE
+          ipar=OB(isit).ltog(ipar,1)
+          isys=INDEX(SYS,CKF.system(i:i))
+          IF (isys .EQ. CKF.iref) THEN
+            SIT(isit).rclock(isys)=PM(ipar,isit).xini
+!ELSE
+!  SIT(isit).rclock(isys)=PM(ipar,isit).xini+SIT(isit).rclock(CKF.iref)
+          END IF
+          PM(ipar,isit).ptime=OB(isit).jd+OB(isit).tsec/86400.d0
+        END DO
+
+!! prepare a priori zenith tropo delay correction (unit: m)
+        IF (CKF.ztdmod(1:4).NE.'NONE' .AND. SIT(isit)%skd(1:1).NE.'D') THEN
+          ipar=pointer_string(OB(isit).npar,OB(isit).pname,CKF.ztdmod)
+          IF (ipar.NE.0) THEN
+            ipar=OB(isit).ltog(ipar,1)
+!@ CMT BY XSY: 湿延迟残余量是待估计的参数
+            SIT(isit).ztdcor=PM(ipar,isit).xini
+            IF (INDEX(CKF.ztdmod,':') .EQ. 0) THEN
+              PM(ipar,isit).ptime=CKF.mjd+CKF.sod/86400.d0
+            ELSE IF (PM(ipar,isit).iobs .EQ. 0) THEN
+              i=INDEX(CKF.ztdmod,':')
+              READ(CKF.ztdmod(i+1:),*) minut
+              PM(ipar,isit).ptime(1)=CKF.mjd+CKF.sod/86400.d0
+              PM(ipar,isit).ptime(2)=CKF.mjd+CKF.sod/86400.d0+minut/1440.d0
+            END IF
+          END IF
+        END IF
+        
+!! Constrain the ZWD, not its' correction
+        IF (CKF%ztdmod(1:3).EQ.'FIX') THEN
+          IF (SIT(isit)%skd(1:1).NE.'D') THEN
+            CALL read_ztd(CKF%flnztd,CKF%mjd+CKF%sod/86400.d0,SIT(isit)%name,SIT(isit)%ztdcor)
+            IF (SIT(isit)%ztdcor.EQ.0.D0) THEN
+              WRITE(OUTPUT_UNIT,'(A)') '###WARNING(ppp.f90): no ZTD for '//SIT(isit).name
+            END IF
+!@ CMT BY XSY: HISI仿真对流层层产品中断
+            IF (CKF%lockout(1).NE.0.D0 .AND. CKF%lockout(2).NE.0.D0) THEN
+              IF ((CKF%mjd+CKF%sod/86400.d0).GE.CKF%lockout(1) .AND. (CKF%mjd+CKF%sod/86400.d0).LT.CKF%lockout(2)) THEN
+                SIT(isit)%ztdcor=0.d0
+              END IF
+            END IF  
+          ELSE
+            SIT(isit)%ztdcor=0.d0
+          END IF
+        END IF
+
+!! prepare a grident troposphere delay
+        IF (CKF.grdmod(1:4) .NE. 'NONE') THEN
+          ipar=pointer_string(OB(isit).npar,OB(isit).pname,'N'//CKF.grdmod)
+          IF (ipar .EQ. 0) CYCLE
+          ipar=OB(isit).ltog(ipar,1)
+          IF (INDEX(CKF.grdmod,':') .EQ. 0) THEN
+            PM(ipar,isit).ptime=CKF.mjd+CKF.sod/86400.d0
+          ELSE IF (PM(ipar,isit).iobs .EQ. 0) THEN
+            i=INDEX(CKF.grdmod,':')
+            READ(CKF.grdmod(i+1:),*) minut
+            PM(ipar,isit).ptime(1)=CKF.mjd+CKF.sod/86400.d0
+            PM(ipar,isit).ptime(2)=CKF.mjd+CKF.sod/86400.d0+minut/1440.d0
+          END IF
+          ipar=pointer_string(OB(isit).npar,OB(isit).pname,'S'//CKF.grdmod)
+          ipar=OB(isit).ltog(ipar,1)
+          IF (INDEX(CKF.grdmod,':') .EQ. 0) THEN
+            PM(ipar,isit).ptime=CKF.mjd+CKF.sod/86400.d0
+          ELSE IF (PM(ipar,isit).iobs .EQ. 0) THEN
+            i=INDEX(CKF.grdmod,':')
+            READ(CKF.grdmod(i+1:),*) minut
+            PM(ipar,isit).ptime(1)=CKF.mjd+CKF.sod/86400.d0
+            PM(ipar,isit).ptime(2)=CKF.mjd+CKF.sod/86400.d0+minut/1440.d0
+          END IF
+        END IF
+
+!! prepare a priori slant ionosphere delay correction (unit: m)
+        IF (CKF.ionmod(1:3) .EQ. 'SID' .OR. CKF.ionmod(1:3) .EQ. 'FIX') THEN
+          DO isat=1, CKF.nprn
+            ipar=pointer_string(OB(isit).npar,OB(isit).pname,'ION'//CKF.cprn(isat))
+            IF (ipar .EQ. 0) CYCLE
+            ipar=OB(isit).ltog(ipar,isat)
+            SIT(isit).ion(isat)=PM(ipar,isit).xini
+            PM(ipar,isit).ptime=CKF.mjd+CKF.sod/86400.d0
+          END DO
+        ELSE
+          SIT(isit).ion=0.d0
+        END IF
+
+!! additional parameters to compensate the SISRE error
+        IF (CKF.lbds .EQ. .TRUE.) THEN
+          DO isat=1, CKF.nprn
+            ipar=pointer_string(OB(isit).npar,OB(isit).pname,'SISRE'//CKF.cprn(isat))
+            IF (ipar .EQ. 0) CYCLE
+            ipar=OB(isit).ltog(ipar,isat)
+            SIT(isit).sisre(isat)=PM(ipar,isit).xini
+            PM(ipar,isit).ptime=CKF.mjd+CKF.sod/86400.d0
+          END DO
+        ELSE
+          SIT(isit).sisre=0.d0
+        END IF
+
+!! one way observation model
+        CALL ppp_gps_model(CKF,SIT(isit),OB(isit),SAT,BHD,IOD,ifcb,sion)
+
+!! check data elevation cutoff angle
+        DO isat=1, CKF.nprn
+          IF (OB(isit).omc(isat,1) .NE. 0.d0) THEN
+            IF (OB(isit).elev(isat) .LT. SIT(isit).cutoff) THEN
+                OB(isit).omc(isat,1:2*MAXFREQ)=0.d0
+            END IF
+          END IF
+        END DO
+
+! Update the initial corrdinates from orb file
+        IF (SIT(isit).skd(1:2) .EQ. 'DP') THEN !DP: 估计地固系坐标(m),评估ACR
+          ipar=pointer_string(OB(isit).npar,OB(isit).pname,'STAPX')
+          ipar=OB(isit).ltog(ipar,1)
+          DO i=0, 2
+            PM(ipar+i,isit).xini=SIT(isit).x(i+1)
+          END DO
+          SL(isit).refx(1:3)=SAT(CKF.nprn+SIT(isit).ileo).x(1:3)
+!! matrix used to transform the orbit differences in itrf to acr frame
+          SL(isit).rot=SIT(isit).rot_l2f
+        END IF
+
+        IF (SIT(isit).skd(1:2).EQ.'DK') THEN !DK: 估计地固系坐标(m),评估ENU,没有速度项
+! SL(isit).refx(1:3)=SIT(isit).x(1:3) !SAT(CKF.nprn+SIT(isit).ileo).x(1:3)
+! SL(isit).rot=SIT(isit).rot_l2f
+          CALL xyzblh(SIT(isit).x(1:3),1.d0,0.d0,0.d0,0.d0,0.d0,0.d0,SIT(isit).geod)
+          CALL rot_enu2xyz(SIT(isit).geod(1),SIT(isit).geod(2),SIT(isit).rot_l2f)
+          SL(isit).refx(1:3)=SIT(isit).x(1:3)
+          SL(isit).rot=SIT(isit).rot_l2f          
+        END IF
+
+        IF (SIT(isit).skd(1:2) .EQ. 'DE') THEN !DE: 估计惯性系坐标(km),评估ACR
+          SL(isit).refx(1:3)=SIT(isit).dx0(1:3)
+! SIT(isit).rot_l2f=0.d0
+! SIT(isit).rot_l2f(1,1)=1.d0
+! SIT(isit).rot_l2f(2,2)=1.d0
+! SIT(isit).rot_l2f(3,3)=1.d0
+        END IF
+
+!! For kinematic position, there are five satellites at least to solve the coordinates
+        IF (SIT(isit).skd(1:1).EQ.'K' .OR. SIT(isit).skd(1:2).EQ.'DK') THEN
+          nobs=0
+          DO isat=1, OB(isit).nprn
+            IF (COUNT(OB(isit).omc(isat,1:2*MAXFREQ).NE.0.d0) .NE. 0) nobs=nobs+1
+          END DO
+          IF (nobs .GE. 4) THEN
+            IF (ikin .EQ. -1) THEN
+              CALL ppp_spp(CKF,SAT,SIT(isit),OB(isit),corx)
+              ipar=pointer_string(OB(isit).npar,OB(isit).pname,'STAPX')
+              ipar=OB(isit).ltog(ipar,1)
+              IF (ipar.NE.0 .AND. corx(5).GT.10.d0) THEN
+                DO i=0, 2
+                  PM(ipar+i,isit).xini=PM(ipar+i,isit).xini+corx(i+1)
+                END DO
+                SIT(isit).rclock(CKF.iref)=SIT(isit).rclock(CKF.iref)+corx(4)
+                IF (ntim .GT. 10) THEN
+                  WRITE(OUTPUT_UNIT,'(A)') '###WARNING(spp): COD PPP bad '//SIT(isit).name
+                  CYCLE
+                ELSE
+                  GOTO 200
+                END IF
+              END IF
+            END IF
+          END IF
+        END IF
+
+!@ CMT BY XSY: 最终进入滤波器的卫星
+        CALL ppp_out_omc(CKF,SIT(isit),OB(isit),SAT)
+
+!@ CMT BY XSY: 载波相位历元间差分周跳探测
+        IF (CKF.llog .EQ. .FALSE. .AND. INDEX(CKF.uobs,'PHASE').NE.0) THEN
+          OBD(isit)=OB(isit)
+          CALL ppp_epc_diff(isit,CKF,SIT(isit),OBD(isit))
+          CALL ppp_scr_grid(isit,CKF,SIT(isit),OB(isit),OBD(isit),SAT)
+        END IF
+
+!! save initial receiver clock correction
+! DO i=1, CKF.nsys
+!  ipar=pointer_string(OB(isit).npar,OB(isit).pname,'RECCLK'//CKF.system(i:i))
+!  isys=INDEX(SYS,CKF.system(i:i))
+!  PM(OB(isit).ltog(ipar,1),isit).xini=SIT(isit).rclock(isys)
+! END DO
+
+!! save initial receiver clock correction and ISB
+        DO i=1, CKF.nsys
+          ipar=pointer_string(OB(isit).npar,OB(isit).pname,'RECCLK'//CKF.system(i:i))
+          IF (ipar .EQ. 0) CYCLE
+          ipar=OB(isit).ltog(ipar,1)
+          isys=INDEX(SYS,CKF.system(i:i))
+          IF (isys .EQ. CKF.iref) THEN
+            PM(ipar,isit).xini=SIT(isit).rclock(isys)
+!ELSE
+!  PM(ipar,isit).xini=SIT(isit).rclock(isys)-SIT(isit).rclock(CKF.iref)
+          END IF
+! ISB is not set init value in norm equation, it can be cansidered to correct in omc
+          IF (.NOT.CKF%lisb .AND. isys .NE. CKF%iref) PM(ipar,isit).xini=0.d0          
+        END DO
+
+!! prepare a priori slant ionosphere delay correction (unit: m)
+        IF (CKF.ionmod(1:3) .EQ. 'SID' .OR. CKF.ionmod(1:3) .EQ. 'FIX') THEN
+          DO isat=1, CKF.nprn
+            ipar=pointer_string(OB(isit).npar,OB(isit).pname,'ION'//CKF.cprn(isat))
+            ipar=OB(isit).ltog(ipar,isat)
+            PM(ipar,isit).xini=SIT(isit).ion(isat)
+          END DO
+        END IF
+
+!@ CMT BY XSY: for DIA successful setect cycle slip
+        dia_NM(isit)%ns=NM(isit)%ns
+        dia_NM(isit)%imtx=NM(isit)%imtx
+        dia_NM(isit)%nobs=NM(isit)%nobs
+        dia_NM(isit)%infs=NM(isit)%infs
+        dia_AM(:,isit)=AM(:,isit)
+        
+        igg3tim = 0
+300  CONTINUE
+        SIT(isit)%nsat=COUNT(OB(isit).omc(1:CKF.nprn,MAXFREQ+1).NE.0.d0)
+
+!@ CMT BY XSY: fix cycle slips if possible
+! IF (INDEX(CKF.uobs,'PHASE').NE.0) THEN
+!   IF (CKF.cobs(1:2) .EQ. 'IF') THEN
+!     CALL chsip(CKF,SAT,OB(isit),OBH(isit),AM(1,isit),NM(isit))
+!   ELSE IF (CKF.cobs(1:3) .EQ. 'RAW') THEN
+!     CALL cyslip(CKF,SAT,OB(isit),OBH(isit),AM(1,isit),NM(isit))
+!   END IF
+! END IF
+
+!! add new ambiguities
+        IF (INDEX(CKF.uobs,'PHASE').NE.0) CALL ppp_add_newamb(CKF,OB(isit),AM(1,isit),NM(isit),NM(isit).infs)
+
+        CALL dop(CKF,OB(isit),SIT(isit))
+        
+!! Melbourne-Wubbean combination observable for IF
+! IF (INDEX(CKF.uobs,'PHASE').NE.0 .AND. CKF.cobs(1:2).EQ.'IF' .AND. MAXVAL(CKF.nfreq).GE.3) THEN
+!   CALL ppp_abfix_emw(CKF,isit,SAT,OB(isit),NM(isit),AM(1,isit),UPD)
+!   CALL ppp_abfix_mw(CKF,isit,SAT,OB(isit),NM(isit),AM(1,isit),UPD)
+! END IF
+
+!! add to information matrix
+        IF (SIT(isit).skd(1:2) .NE. 'DE') THEN
+          CALL ppp_addob_pri(CKF,SAT,OB(isit),SIT(isit),NM(isit),PM(1,isit),AM(1,isit),NM(isit).infs,sion)
+        ELSE
+          nslip=0
+          DO isat=1,CKF%nprn
+            IF (OB(isit)%omc(isat,MAXFREQ+1).NE.0.d0) THEN
+              IF (OB(isit)%flag(isat,1).NE.0.d0) nslip=nslip+1
+            END IF
+          END DO          
+          IF (SIT(isit)%nsat .LT. 5 .OR. SIT(isit)%nsat-nslip .LT. 4) THEN
+            IF (MOD(INT((CKF.mjd-CKF.mjd0)*86400.0+CKF.sod-CKF.sod0),CKF.ReConvTime) .NE. 0) THEN
+              DO isat=1,CKF%nprn
+                OB(isit)%var(isat,:)=OB(isit)%var(isat,:)*100.d0
+              END DO
+            END IF
+          END IF
+          CALL ppp_addob_pri(CKF,SAT,OB(isit),SIT(isit),NM(isit),PM(1,isit),AM(1,isit),NM(isit).infs,sion)
+        END IF
+
+        igg3tim = igg3tim + 1
+!! add constrain to bias, but not necessary
+! CALL ppp_con_bias(CKF,PM(1,isit),NM(isit),NM(isit).infs)
+
+      END IF
+! WRITE(5000,'(A,I6,F10.1)')'=======================> infs <==',CKF%mjd,CKF%sod
+! WRITE(5000,'(A12,<NM(isit)%imtx>(2X,A9),<NM(isit)%nobs>(A9,2X))')(PM(i,isit)%pname,i=1,NM(isit)%imtx),(CKF%cprn(NM(isit)%ipob(i,1)),i=1,NM(isit)%nobs)
+! DO i=1,NM(isit)%npc
+!   WRITE(5000,'(A10,2X,<NM(isit)%imtx+NM(isit)%nobs>(F9.4,2X))')PM(i,isit)%pname,(NM(isit)%infs(j,i),j=1,NM(isit)%imtx+NM(isit)%nobs)
+! END DO
+! DO i=1,NM(isit)%ns
+!   WRITE(OUTFREQ,'(I1)')AM(i,isit)%ifreq
+!   WRITE(5000,'(A10,2X,<NM(isit)%imtx+NM(isit)%nobs>(F9.4,2X))')CKF%cprn((AM(i,isit)%psat))//'__AMBL'//OUTFREQ,(NM(isit)%infs(j,i+NM(isit)%npc),j=1,NM(isit)%imtx+NM(isit)%nobs)
+! END DO
+! WRITE(5000,'(A12,<NM(isit)%imtx+NM(isit)%nobs>(F9.4,2X))')'OMC         ',(NM(isit)%infs(j,NM(isit)%imtx+1),j=1,NM(isit)%imtx+NM(isit)%nobs)
+
+!! measurement update
+      IF (CKF.llog .EQ. .FALSE.) THEN
+        CALL ppp_msu_update(.TRUE.,NM(isit).nobs,NM(isit),NM(isit).infs)
+      ELSE
+        CALL ppp_msu_update(.FALSE.,NM(isit).nobs,NM(isit),NM(isit).infs)
+      END IF
+! WRITE(5000,'(12X,<NM(isit)%imtx>(2X,A9),<NM(isit)%nobs>(A9,2X))')(PM(i,isit)%pname,i=1,NM(isit)%imtx),(CKF%cprn(NM(isit)%ipob(i,1)),i=1,NM(isit)%nobs)
+! DO i=1,NM(isit)%npc
+!   WRITE(5000,'(A10,2X,<NM(isit)%imtx+NM(isit)%nobs>(F9.4,2X))')PM(i,isit)%pname,(NM(isit)%infs(j,i),j=1,NM(isit)%imtx+NM(isit)%nobs)
+! END DO
+! DO i=1,NM(isit)%ns
+!   WRITE(OUTFREQ,'(I1)')AM(i,isit)%ifreq
+!   WRITE(5000,'(A10,2X,<NM(isit)%imtx+NM(isit)%nobs>(F9.4,2X))')CKF%cprn((AM(i,isit)%psat))//'__AMBL'//OUTFREQ,(NM(isit)%infs(j,i+NM(isit)%npc),j=1,NM(isit)%imtx+NM(isit)%nobs)
+! END DO
+! WRITE(5000,'(A12,<NM(isit)%imtx+NM(isit)%nobs>(F9.4,2X))')'OMC         ',(NM(isit)%infs(j,NM(isit)%imtx+1),j=1,NM(isit)%imtx+NM(isit)%nobs)
+
+!! real-time data screening using post-fit residual
+      IF (CKF.llog .EQ..FALSE. .AND. INDEX(CKF.uobs,'PHASE').NE.0) THEN
+
+! CALL ppp_dat_screen(CKF,SAT,OB(isit),OBH(isit),AM(1,isit),NM(isit),NM(isit).infs)
+!@ CMT BY XSY: IGG3放在DIA之前
+        IF (CKF.igg3 .AND. NM(isit)%esig.GT.CKF%DiaSig) THEN
+          IF (igg3tim .LE. 1) THEN
+            CALL ppp_igg3(NM(isit).nobs,CKF,OB(isit),NM(isit))
+            NM(isit)%ns=dia_NM(isit)%ns
+            NM(isit)%imtx=dia_NM(isit)%imtx
+            NM(isit)%nobs=dia_NM(isit)%nobs
+            NM(isit)%infs=dia_NM(isit)%infs
+            AM(:,isit)=dia_AM(:,isit)             
+            GOTO 300
+          END IF
+        END IF
+        
+        CALL ppp_dia(CKF,SAT,OB(isit),OBH(isit),NM(isit),NM(isit).infs,DIA_nbias)
+        IF (DIA_nbias.GT.0.d0) THEN
+          NM(isit)%ns=dia_NM(isit)%ns
+          NM(isit)%imtx=dia_NM(isit)%imtx
+          NM(isit)%nobs=dia_NM(isit)%nobs
+          NM(isit)%infs=dia_NM(isit)%infs
+          AM(:,isit)=dia_AM(:,isit)
+
+! IF (INDEX(CKF.uobs,'PHASE').NE.0) THEN
+!   IF (CKF.cobs(1:2) .EQ. 'IF') THEN
+!     CALL chsip(CKF,SAT,OB(isit),OBH(isit),AM(1,isit),NM(isit))
+!   ELSE IF (CKF.cobs(1:3) .EQ. 'RAW') THEN
+!     CALL cyslip(CKF,SAT,OB(isit),OBH(isit),AM(1,isit),NM(isit))
+!   END IF
+! END IF
+          CALL ppp_add_newamb(CKF,OB(isit),AM(1,isit),NM(isit),NM(isit).infs)
+          IF (SIT(isit).skd(1:2) .NE. 'DE') THEN
+            CALL ppp_addob_pri(CKF,SAT,OB(isit),SIT(isit),NM(isit),PM(1,isit),AM(1,isit),NM(isit).infs,sion)
+          ELSE   
+            nslip=0
+            DO isat=1,CKF%nprn
+              IF (OB(isit)%omc(isat,MAXFREQ+1).NE.0.d0) THEN
+                IF (OB(isit)%flag(isat,1).NE.0.d0) nslip=nslip+1
+              END IF
+            END DO          
+            IF (SIT(isit)%nsat .LT. 5 .OR. SIT(isit)%nsat-nslip .LT. 4) THEN
+              IF (MOD(INT((CKF.mjd-CKF.mjd0)*86400.0+CKF.sod-CKF.sod0),CKF.ReConvTime) .NE. 0) THEN
+                DO isat=1,CKF%nprn
+                  OB(isit)%var(isat,:)=OB(isit)%var(isat,:)*100.d0
+                END DO
+              END IF
+            END IF            
+            CALL ppp_addob_pri(CKF,SAT,OB(isit),SIT(isit),NM(isit),PM(1,isit),AM(1,isit),NM(isit).infs,sion)
+          END IF          
+          CALL ppp_msu_update(.FALSE.,NM(isit).nobs,NM(isit),NM(isit).infs)
+        END IF
+        NM(isit)%esig_before=NM(isit)%esig
+
+!@ CMT BY XSY: IGG3放在DIA之后
+        IF (CKF.igg3 .AND. DIA_nbias.EQ.0) THEN
+          IF (igg3tim .LE. 2) THEN
+            CALL ppp_igg3(NM(isit).nobs,CKF,OB(isit),NM(isit))
+            NM(isit)%ns=dia_NM(isit)%ns
+            NM(isit)%imtx=dia_NM(isit)%imtx
+            NM(isit)%nobs=dia_NM(isit)%nobs
+            NM(isit)%infs=dia_NM(isit)%infs
+            AM(:,isit)=dia_AM(:,isit)             
+            GOTO 300
+          END IF
+        END IF
+        
+!! update time tags for ambiguities
+        DO isat=1, CKF.nprn
+          isys=INDEX(SYS,CKF.cprn(isat)(1:1))
+          DO ifreq=1, CKF.nfq(isys)
+            WRITE(camb,'(A4,I1)') 'AMBL',ifreq
+            iamb =pointer_string(OB(isit).npar,OB(isit).pname,camb)
+            IF (OB(isit).omc(isat,ifreq) .EQ. 0.d0) CYCLE
+            ipar=OB(isit).ltog(iamb,isat)-NM(isit).npc
+            IF (OB(isit).flag(isat,ifreq) .NE. 0) THEN
+              AM(ipar,isit).ptime(1)=CKF.mjd+CKF.sod/86400.d0
+            END IF
+            AM(ipar,isit).ptime(2)=CKF.mjd+CKF.sod/86400.d0
+          END DO
+        END DO
+      END IF
+      
+!@ CMT BY XSY: 至少需要4颗星才会更新信息矩阵,作历元间差分才有意义
+      IF (COUNT(OB(isit).obs(1:CKF.nprn,MAXFREQ+1).NE.0.d0) .GE. 4) THEN
+        OBH(isit)=OB(isit)
+        OBH(isit).jd=CKF.mjd
+        OBH(isit).tsec=CKF.sod
+      END IF
+
+!! Melbourne-Wubbean combination observable for IF
+      IF (INDEX(CKF.uobs,'PHASE').NE.0 .AND. CKF.cobs(1:2).EQ.'IF' .AND. MAXVAL(CKF.nfreq).EQ.2) THEN
+        IF (CKF%ArMode .EQ. 'IF-DUAL-UD') THEN
+          CALL ppp_abfix_mw(CKF,isit,SAT,OB(isit),NM(isit),AM(1,isit),UPD,SL(isit),SIT(isit))
+        END IF
+      END IF
+      
+!! Geometry-free fixing for RAW
+! IF (INDEX(CKF.uobs,'PHASE').NE.0 .AND. CKF.cobs(1:3).EQ.'RAW') THEN
+!   CALL ppp_abfix_gfwl(CKF,isit,SAT,OB(isit),NM(isit),AM(1,isit),UPD)
+!   IF (MAXVAL(CKF.nfq) .EQ. 3) THEN
+!    CALL ppp_abfix_gfewl(CKF,isit,SAT,OB(isit),NM(isit),AM(1,isit),UPD)
+!   END IF
+! END IF
+
+!! solve information matrix of primary filter
+      CALL ppp_slv_inform(CKF.liar,NM(isit),PM(1,isit),AM(1,isit),NM(isit).infs,QM(isit),QM(isit).invx,Qxyz)
+      
+! WRITE(5000,'(A,I6,F10.1)')'=======================> STEP.1 Output UD Qxx and estimates <==',CKF%mjd,CKF%sod
+! WRITE(5000,'(12X,<NM(isit)%npc>(2X,A10),<NM(isit)%ns>(A10,2X))')(PM(i,isit)%pname,i=1,NM(isit)%npc),(CKF%cprn(AM(i,isit)%psat),i=1,NM(isit)%ns)
+! DO i=1,NM(isit)%npc
+!   WRITE(5000,'(A10,2X,<NM(isit)%imtx>(F10.4,2X))')PM(i,isit)%pname,(QM(isit)%invx(j,i),j=1,NM(isit)%imtx)
+! END DO
+! DO i=1,NM(isit)%ns
+!   WRITE(OUTFREQ,'(I1)')AM(i,isit)%ifreq
+!   WRITE(5000,'(A10,2X,<NM(isit)%imtx>(F10.4,2X))')CKF%cprn(AM(i,isit)%psat)//'__AMBL'//OUTFREQ,(QM(isit)%invx(j,NM(isit)%npc+i),j=1,NM(isit)%imtx)
+! END DO
+! WRITE(5000,'(A12,<NM(isit)%imtx>(F10.4,2X))')'XEST         ',(PM(j,isit)%xcor,j=1,NM(isit)%npc),(AM(j,isit)%famb,j=1,NM(isit)%ns)
+      
+      IF (SIT(isit).skd(1:2) .EQ. 'DE') THEN
+        ipar=pointer_string(OB(isit).npar,OB(isit).pname,'PXSAT')
+      ELSE
+        ipar=pointer_string(OB(isit).npar,OB(isit).pname,'STAPX')
+      END IF
+      ipar=OB(isit).ltog(ipar,1)
+      k=2
+      IF (ipar .EQ. 0) k=-1
+      DO i=0,k
+        SL(isit).fpos(i+1)=PM(ipar+i,isit).xest
+      END DO
+      IF (k .EQ. -1) THEN
+        SL(isit).fpos(1:3)=SIT(isit).x(1:3)
+      END IF
+
+!! narrow-lane ambiguity resoltion in primary filter
+      IF (CKF%liar) THEN
+        SIT(isit)%nfixnl=0
+!&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&
+!@ CMT BY XSY: NEED TO TEST
+        IF (CKF%ArBiasMode .EQ. 'OSB') THEN
+          IF (CKF%cobs(1:2) .EQ. 'IF') THEN
+            IF (CKF%ArMode .EQ. 'IF-DUAL-UD') THEN
+                CALL ppp_abfix_pri(CKF,SIT(isit),SAT,UPD,NM(isit),PM(1,isit),AM(1,isit),QM(isit),SL(isit))
+            END IF
+            IF (CKF%ArMode .EQ. 'IF-DUAL-SD') THEN
+                CALL ppp_abfix_pri_dualsd(CKF,isit,OB(isit),SIT(isit),SAT,UPD,NM(isit),PM(1,isit),AM(1,isit),QM(isit),SL(isit))
+            END IF
+          ELSE IF (CKF%cobs(1:3) .EQ. 'RAW') THEN
+!@ CMT BY XSY: SATELLITE-DIFFERENCE AND MAP L1/L2 TO WL/NL
+            CALL ppp_amb_uduc_sd(CKF,OB(isit),QM(isit),AM(1,isit),NM(isit))
+! WRITE(5000,'(A,I6,F10.1,1X,A3)')'=======================> STEP.2 amb SD and map L1/L2 to NL/WL <==',CKF%mjd,CKF%sod,CKF%refcprn(CKF%iref)
+! WRITE(5000,'(12X,<NM(isit)%npc>(2X,A10),<NM(isit)%ns>(A10,2X))')(PM(i,isit)%pname,i=1,NM(isit)%npc),(CKF%cprn(AM(i,isit)%psat),i=1,NM(isit)%ns)
+! DO i=1,NM(isit)%npc
+!   WRITE(5000,'(A10,2X,<NM(isit)%imtx>(F10.4,2X))')PM(i,isit)%pname,(QM(isit)%invx(j,i),j=1,NM(isit)%imtx)
+! END DO
+! DO i=1,NM(isit)%ns
+!   WRITE(OUTFREQ,'(I1)')AM(i,isit)%ifreq
+!   WRITE(5000,'(A10,2X,<NM(isit)%imtx>(F10.4,2X))')CKF%cprn(AM(i,isit)%psat)//'__AMBL'//OUTFREQ,(QM(isit)%invx(j,NM(isit)%npc+i),j=1,NM(isit)%imtx)
+! END DO
+! ! WRITE(5000,'(A12,<NM(isit)%imtx>(F10.4,2X))')'XEST         ',(PM(j,isit)%xcor,j=1,NM(isit)%npc),(AM(j,isit)%famb,j=1,NM(isit)%ns)
+
+            IF (INDEX(CKF%ArMode,'WAR') .NE. 0) THEN
+              CALL ppp_abfix_uduc_war(CKF,SIT(isit),SAT,OB(isit),NM(isit),PM(1,isit),AM(1,isit),QM(isit),SL(isit))
+            END IF
+            IF (INDEX(CKF%ArMode,'IAR') .NE. 0) THEN
+              CALL ppp_abfix_uduc_iar(CKF,SIT(isit),SAT,OB(isit),NM(isit),PM(1,isit),AM(1,isit),QM(isit),SL(isit))
+            END IF
+          END IF
+        END IF
+!&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&
+!&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&
+!@ CMT BY XSY: NEED TO TEST CORROSPANDING TO FCB
+        IF (CKF%ArBiasMode .EQ. 'FCB') THEN
+          IF (CKF%cobs(1:2) .EQ. 'IF') THEN
+            IF (CKF%ArMode .EQ. 'IF-DUAL-UD') THEN
+              CALL ppp_abfix_fcb_pri(CKF,SIT(isit),SAT,UPD,NM(isit),PM(1,isit),AM(1,isit),QM(isit),SL(isit))
+            END IF
+            IF (CKF%ArMode .EQ. 'IF-DUAL-SD') THEN
+              CALL ppp_abfix_pri_dualsd(CKF,isit,OB(isit),SIT(isit),SAT,UPD,NM(isit),PM(1,isit),AM(1,isit),QM(isit),SL(isit))
+            END IF
+          ELSE IF (CKF%cobs(1:3) .EQ. 'RAW') THEN
+!@ CMT BY XSY: SATELLITE-DIFFERENCE AND MAP L1/L2 TO WL/NL
+            CALL ppp_amb_fcb_uduc_sd(CKF,OB(isit),QM(isit),AM(1,isit),NM(isit),UPD)
+            IF (INDEX(CKF%ArMode,'WAR') .NE. 0) THEN
+              CALL ppp_abfix_fcb_uduc_war(CKF,SIT(isit),SAT,OB(isit),NM(isit),PM(1,isit),AM(1,isit),QM(isit),SL(isit),UPD)
+            END IF
+            IF (INDEX(CKF%ArMode,'IAR') .NE. 0) THEN
+              CALL ppp_abfix_fcb_uduc_iar(CKF,SIT(isit),SAT,OB(isit),NM(isit),PM(1,isit),AM(1,isit),QM(isit),SL(isit),UPD)
+            END IF
+          END IF
+        END IF
+!&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&
+      END IF
+    END DO
+
+!! output solutions
+    CALL ppp_solution(CKF,SIT,SAT,OB,NM,PM,AM,SL,Qxyz)
+
+    DO isit=1, CKF.nsit
+
+!IF (lfirst(isit).EQ..TRUE.) CYCLE
+
+!! reset ambiguity flag
+      DO isat=1, CKF.nprn
+        isys=INDEX(SYS,CKF.cprn(isat)(1:1))
+        DO ifreq=1, CKF.nfq(isys)
+          IF (OB(isit).omc(isat,ifreq) .EQ. 0.d0) CYCLE
+          IF (OB(isit).flag(isat,ifreq) .NE. 0) OB(isit).flag(isat,ifreq)=0
+        END DO
+      END DO
+
+!! time update
+      IF (SIT(isit).skd(1:2) .EQ. 'DE') THEN
+        CALL ppp_tim_update_block(CKF.mjd,CKF.sod,CKF.dintv,NM(isit),PM(1,isit),NM(isit).infs,SAT(CKF.nprn+SIT(isit).ileo))
+      ELSE
+        CALL ppp_tim_update(CKF.mjd,CKF.sod,NM(isit),PM(1,isit),NM(isit).infs)
+      END IF
+
+      k=0
+      DO i=1,NM(isit).ns
+        IF (AM(i,isit).ifab .EQ. 4) k=k+1
+!IF (CKF.cobs(1:3).EQ.'RAW' .AND. MAXVAL(CKF.nfq).EQ.3 .AND. AM(i,isit).ifab.EQ.2) k=k+1
+        IF (CKF.cobs(1:3).EQ.'RAW' .AND. MAXVAL(CKF.nfq).GE.3 .AND. AM(i,isit).ifab.EQ.2) k=k+1
+      END DO
+
+!! locate inactive ambiguities
+      nbias=0
+      DO i=1,NM(isit).ns
+        isat=AM(i,isit).psat
+! 2018/08/20 JG
+!IF (CKF.lamb.EQ..FALSE. .OR. (CKF.lamb.EQ..TRUE. .AND. (k.LT.INT(nobs/CKF.nsys/2)+2))) AM(i,isit).ifab=0
+!IF (CKF.lamb.EQ..FALSE. .OR. (CKF.lamb.EQ..TRUE. .AND. (k.LT.CKF.nl_minsav))) AM(i,isit).ifab=0
+!IF (CKF.lamb.EQ..FALSE. .OR. (CKF.lamb.EQ..TRUE. .AND. (k.LT.CKF.nl_minsav .OR. SL(isit).nfix.EQ.0) .OR. timdif(CKF.mjd,CKF.sod,CKF.mjd0,CKF.sod0).LE.3600)) AM(i,isit).ifab=0
+        IF (CKF.lamb.EQ..FALSE. .AND. TRIM(AM(i,isit).pname).EQ.'AMBL1') AM(i,isit).ifab=0
+!IF (CKF.lamb.EQ..TRUE. .AND. SL(isit).ncad.EQ.SL(isit).nfix) lfix=.TRUE.
+!IF (lfix .EQ. .FALSE.) AM(i,isit).ifab=0
+!IF (CKF.lamb.EQ..TRUE. .AND. timdif(CKF.mjd,CKF.sod,INT(AM(i,isit).ptime(1)),(AM(i,isit).ptime(1)-INT(AM(i,isit).ptime(1)))*86400.d0).LE.CKF.minsec_common) AM(i,isit).ifab=0
+        ifreq=AM(i,isit).ifreq
+        iamb =pointer_string(OB(isit).npar,OB(isit).pname,AM(i,isit).pname)
+        IF (CKF.llog .EQ. .FALSE.) THEN
+          IF (OB(isit).ltog(iamb,isat).NE.NM(isit).npc+i .OR. &
+             (CKF.mjd-AM(i,isit).ptime(2))*86400.d0+CKF.sod.GT.1200.d0) THEN
+            nbias=nbias+1
+            ibias(nbias)=i
+            IF (OB(isit).ltog(iamb,isat) .EQ. NM(isit).npc+i) THEN
+              OB(isit).ltog(iamb,isat)=0
+              OB(isit).flag(isat,ifreq)=1
+              AM(i,isit).ifab=0
+            END IF
+          END IF
+        ELSE
+          IF (DABS((CKF.mjd-AM(i,isit).ptime(2))*86400.d0+CKF.sod) .LE. MAXWND) THEN
+            nbias=nbias+1
+            ibias(nbias)=i
+            IF (OB(isit).ltog(iamb,isat) .EQ. NM(isit).npc+i) THEN
+              OB(isit).ltog(iamb,isat)=0
+              OB(isit).flag(isat,ifreq)=1
+              AM(i,isit).ifab=0
+            END IF
+          END IF
+        END IF
+
+      END DO
+
+!! remove selected biases
+      IF (nbias .NE. 0) THEN
+        CALL ppp_del_ambi(nbias,ibias,AM(1,isit),NM(isit),NM(isit).infs)
+!! adjust remaining pointers to information matrix
+        DO i=1,NM(isit).ns
+          iamb =pointer_string(OB(isit).npar,OB(isit).pname,AM(i,isit).pname)
+          OB(isit).ltog(iamb,AM(i,isit).psat)=NM(isit).npc+i
+        END DO
+      END IF
+
+    END DO
+
+!! next epoch
+    IF (CKF.lpost .EQ. .TRUE.) THEN
+      CALL timinc(CKF.mjd,CKF.sod,CKF.dintv,CKF.mjd,CKF.sod)
+      IF ((CKF.mjd-CKF.mjd1)*86400.d0+CKF.sod-CKF.sod1 .GT. 0.d0) EXIT
+    END IF
+  END DO
+
+!! clean memory
+  DEALLOCATE(PM)
+  DEALLOCATE(AM)
+  DEALLOCATE(dia_AM)
+  DO isit=1, CKF.nsit
+    DEALLOCATE(NM(isit).infs)
+    DEALLOCATE(NM(isit)%co_infs)
+    DEALLOCATE(NM(isit).iptx)
+    DEALLOCATE(QM(isit).idq)
+    DEALLOCATE(QM(isit).invx)
+
+    DEALLOCATE(dia_NM(isit)%iptx)
+    DEALLOCATE(dia_NM(isit)%infs)
+    DEALLOCATE(dia_NM(isit)%co_infs)
+  END DO
+  DEALLOCATE(NM)
+  DEALLOCATE(dia_NM)
+  DEALLOCATE(QM)
+  DEALLOCATE(SL)
+  IF (CKF.lpost .EQ. .TRUE.) DEALLOCATE(HD)
+  DEALLOCATE(OB)
+  DEALLOCATE(OBH)
+  DEALLOCATE(OBD)
+
+  STOP
+
+100 CONTINUE
+  WRITE(ERROR_UNIT,'(A)') '***ERROR(ppprt): memory allocation'
+  CALL exit(1)
+
+END PROGRAM

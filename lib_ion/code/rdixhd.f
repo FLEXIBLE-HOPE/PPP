@@ -1,0 +1,471 @@
+C*
+      SUBROUTINE RDIXHD(MAXADT,ADTLBL,SATSTR,PGMSTR,AGESTR,DATSTR,
+     1                  TITTXT,MAPSTR,OBSTXT,INXSP1,INXSP2,ADTLST,
+     2                  IEXP  ,IRC   )
+CC
+CC NAME       :  RDIXHD
+CC
+CC PURPOSE    :  READ IONEX HEADER
+CC
+CC PARAMETERS :
+CC         IN :  MAXADT : MAXIMUM NUMBER OF AUX RECORDS       I*4
+CC     IN/OUT :  ADTLBL : LABEL OF AUX DATA REQUESTED/FOUND   CH*60
+CC                        =' ': NOT REQUESTED/FOUND
+CC        OUT :  SATSTR : SATELLITE SYSTEM                    CH*20
+CC               PGMSTR : PROGRAM                             CH*20
+CC               AGESTR : AGENCY                              CH*20
+CC               DATSTR : DATE AND TIME                       CH*20
+CC               TITTXT : TITLE LINE / FIRST COMMENT LINE     CH*60
+CC                        =' ': UNDEFINED
+CC               MAPSTR : MAPPING FUNCTION                    CH*4
+CC               OBSTXT : OBSERVABLES USED                    CH*60
+CC               INXSP1 : SPECIFICATIONS 1                    R*8(*)
+CC                        ( 1): EPOCH OF FIRST MAP (IN MJD)
+CC                        ( 2): EPOCH OF LAST MAP (IN MJD)
+CC                        ( 3): INTERVAL (IN SEC)
+CC                        ( 4): FROM LATITUDE
+CC                        ( 5): TO LATITUDE
+CC                        ( 6): WITH INCREMENT (IN DEG)
+CC                        ( 7): FROM LONGITUDE
+CC                        ( 8): TO LONGITUDE
+CC                        ( 9): WITH INCREMENT (IN DEG)
+CC                        (10): ELEVATION CUTOFF (IN DEG)
+CC                        (11): BASE RADIUS (IN KM)
+CC                        (12): FROM HEIGHT
+CC                        (13): TO HEIGHT
+CC                        (14): WITH INCREMENT (IN KM)
+CC               INXSP2 : SPECIFICATIONS 2                    I*4(*)
+CC                        =0: NOT FOUND
+CC                        (1): NUMBER OF STATIONS
+CC                        (2): NUMBER OF SATELLITES
+CC               ADTLST(I),I=1,..,MAXADT: LIST OF AUX DATA    CH*80(*)
+CC               IEXP   : DEFAULT EXPONENT                    I*4
+CC               IRC    : RETURN CODE                         I*4
+CC                        =0: ERROR OCCURRED
+CC                        =1: OK
+CC
+CC SR CALLED  :  DJUL
+CC
+CC REMARKS    :  IONEX VERSION 1.0
+CC
+CC AUTHOR     :  S.SCHAER
+CC
+CC VERSION    :  4.1
+CC
+CC CREATED    :  16-SEP-97
+CC
+CC CHANGES    :  13-NOV-97 : SS: RETURN FIRST COMMENT LINE
+CC               09-JUN-98 : SS: CHECK IONEX DATA GRID CORRECTLY
+CC               02-Oct-18 : SS: Corrected INXSP1(14); added WRITE
+CC
+CC COPYRIGHT  :  ASTRONOMICAL INSTITUTE
+CC      1997      UNIVERSITY OF BERNE
+CC                    SWITZERLAND
+CC
+C*
+      IMPLICIT REAL*8 (A-H,O-Z)
+C
+      PARAMETER (NUMREC=22)
+C
+      CHARACTER*80  ADTLST(*),LINE
+      CHARACTER*60  OBSTXT,ADTLBL,ADTLB0,TITTXT
+      CHARACTER*20  SATSTR,PGMSTR,AGESTR,DATSTR,INXREC(NUMREC),AUXREC
+      CHARACTER*20  INXLB0,INXLBL
+      CHARACTER*4   MAPSTR
+C
+      REAL*8        INXSP1(*),GRDFAC(4)
+C
+      INTEGER*4     INXSP2(*),RECFLG(NUMREC)
+C
+      INCLUDE 'I:COMLFNUM'
+C
+      DATA XVER0/1.0D0/
+C
+C SET IONEX RECORDS
+C -----------------
+      DATA INXREC/'IONEX VERSION / TYPE','PGM / RUN BY / DATE ',
+     1            'COMMENT             ','DESCRIPTION         ',
+     2            'EPOCH OF FIRST MAP  ','EPOCH OF LAST MAP   ',
+     3            'INTERVAL            ','# OF MAPS IN FILE   ',
+     4            'MAPPING FUNCTION    ','ELEVATION CUTOFF    ',
+     5            'OBSERVABLES USED    ','# OF STATIONS       ',
+     6            '# OF SATELLITES     ','BASE RADIUS         ',
+     7            'MAP DIMENSION       ','HGT1 / HGT2 / DHGT  ',
+     8            'LAT1 / LAT2 / DLAT  ','LON1 / LON2 / DLON  ',
+     9            'EXPONENT            ','START OF AUX DATA   ',
+     1            'END OF AUX DATA     ','END OF HEADER       '/,
+     2     INXLB0/'IONOSPHERE MAPS     '/
+C
+C INITIALIZE VARIABLES
+C --------------------
+      SATSTR=' '
+      PGMSTR=' '
+      AGESTR=' '
+      DATSTR=' '
+      TITTXT=' '
+      MAPSTR=' '
+      OBSTXT=' '
+      DO I=1,12
+        INXSP1(I)=0.D0
+      ENDDO
+      DO I=1,2
+        INXSP2(I)=0
+      ENDDO
+      DO I=1,MAXADT
+        ADTLST(I)=' '
+      ENDDO
+      ADTLB0=' '
+      IEXP=-1
+C
+C SET DEFAULT RETURN CODE
+      IRC=1
+C
+C INITIALIZE FLAGS
+C ----------------
+      DO I=1,NUMREC
+        RECFLG(I)=0
+      ENDDO
+C
+C SET DEFAULT FLAGS FOR OPTIONAL IONEX RECORDS
+      RECFLG( 3)=-1
+      RECFLG( 4)=-1
+      RECFLG(12)=-1
+      RECFLG(13)=-1
+      RECFLG(19)=-1
+      RECFLG(20)=-1
+      RECFLG(21)=-1
+C
+C READ AND CHECK FIRST IONEX RECORD
+C ---------------------------------
+      READ(LFNLOC,901,END=100) LINE
+901   FORMAT(A80)
+C
+C FIRST KEYWORD
+      AUXREC=LINE(61:80)
+      IF (AUXREC.NE.INXREC(1)) THEN
+        WRITE(LFNERR,1901) LINE
+1901    FORMAT(/,' *** SR RDIXHD: INVALID FIRST IONEX RECORD',
+     1    /,A80,/)
+        IRC=0
+        GOTO 300
+      ENDIF
+C
+      READ(LINE,902,ERR=200) XVER,INXLBL,SATSTR
+902   FORMAT(F8.1,12X,A20,A20)
+C
+C IONEX VERSION NUMBER
+      IF (XVER.NE.XVER0) THEN
+        WRITE(LFNERR,1902) XVER,XVER0
+1902    FORMAT(/,' *** SR RDIXHD: INVALID IONEX VERSION NUMBER',
+     1    /,16X,'VERSION NUMBER FOUND   : ',F8.1,
+     2    /,16X,'VERSION NUMBER ALLOWED : ',F8.1,/)
+        IRC=0
+        GOTO 300
+      ENDIF
+C
+C IONEX LABEL
+      IF (INXLBL(1:1).NE.INXLB0(1:1)) THEN
+        WRITE(LFNERR,1903) INXLBL(1:1),INXLBL(2:20),INXLB0(1:1),
+     1    INXLB0(2:2)
+1903    FORMAT(/,' *** SR RDIXHD: INVALID IONEX LABEL',
+     1    /,16X,'LABEL FOUND   : ',A1,'(',A19,')',
+     2    /,16X,'LABEL ALLOWED : ',A1,'(',A19,')',/)
+        IRC=0
+        GOTO 300
+      ENDIF
+C
+      RECFLG(1)=1
+C
+C LOOP OVER ALL HEADER LINES
+C --------------------------
+400   CONTINUE
+      READ(LFNLOC,901,END=100) LINE
+C
+C CURRENT KEYWORD
+      AUXREC=LINE(61:80)
+C
+C LOOK FOR CURRENT KEYWORD AND STORE CORRESPONDING INFORMATION
+C ------------------------------------------------------------
+C
+C PROGRAM, AGENCY, DATE
+      IF (AUXREC.EQ.INXREC(2)) THEN
+        READ(LINE,903) PGMSTR,AGESTR,DATSTR
+903     FORMAT(A20,A20,A20)
+        RECFLG(2)=1
+C
+C SKIP COMMENT LINES
+      ELSEIF (AUXREC.EQ.INXREC(3)) THEN
+        IF (RECFLG(3).NE.1) READ(LINE,904) TITTXT
+904     FORMAT(A60)
+        RECFLG(3)=1
+        GOTO 400
+C
+C SKIP DESCRIPTION LINES
+      ELSEIF (AUXREC.EQ.INXREC(4)) THEN
+        RECFLG(4)=1
+        GOTO 400
+C
+C "EPOCH OF FIRST MAP"
+      ELSEIF (AUXREC.EQ.INXREC(5)) THEN
+        READ(LINE,911,ERR=200) IYEAR,IMONTH,IDAY,IHOUR,IMIN,ISEC
+911     FORMAT(6I6)
+        RECFLG(5)=1
+C
+        INXSP1(1)=DJUL(IYEAR,IMONTH,IDAY+IHOUR/24.D0+
+     1    IMIN/1440.D0+ISEC/86400.D0)
+C
+C "EPOCH OF LAST MAP"
+      ELSEIF (AUXREC.EQ.INXREC(6)) THEN
+        READ(LINE,911,ERR=200) IYEAR,IMONTH,IDAY,IHOUR,IMIN,ISEC
+        RECFLG(6)=1
+C
+        INXSP1(2)=DJUL(IYEAR,IMONTH,IDAY+IHOUR/24.D0+
+     1    IMIN/1440.D0+ISEC/86400.D0)
+C
+C "INTERVAL"
+      ELSEIF (AUXREC.EQ.INXREC(7)) THEN
+        READ(LINE,912,ERR=200) IINT
+912     FORMAT(I6)
+        RECFLG(7)=1
+C
+        INXSP1(3)=DBLE(IINT)
+C
+C "# OF MAPS IN FILE"
+      ELSEIF (AUXREC.EQ.INXREC(8)) THEN
+        READ(LINE,912,ERR=200) NMAP
+        RECFLG(8)=1
+C
+C "MAPPING FUNCTION"
+      ELSEIF (AUXREC.EQ.INXREC(9)) THEN
+        READ(LINE,921) MAPSTR
+921     FORMAT(2X,A4)
+        RECFLG(9)=1
+C
+C "ELEVATION CUTOFF"
+      ELSEIF (AUXREC.EQ.INXREC(10)) THEN
+        READ(LINE,922,ERR=200) INXSP1(10)
+922     FORMAT(F8.1)
+        RECFLG(10)=1
+C
+C "OBSERVABES USED"
+      ELSEIF (AUXREC.EQ.INXREC(11)) THEN
+        READ(LINE,931) OBSTXT
+931     FORMAT(A60)
+        RECFLG(11)=1
+C
+C "# OF STATIONS"
+      ELSEIF (AUXREC.EQ.INXREC(12)) THEN
+        READ(LINE,912,ERR=200) INXSP2(1)
+        RECFLG(12)=1
+C
+C "# OF SATELLITES"
+      ELSEIF (AUXREC.EQ.INXREC(13)) THEN
+        READ(LINE,912,ERR=200) INXSP2(2)
+        RECFLG(13)=1
+C
+C "BASE RADIUS"
+      ELSEIF (AUXREC.EQ.INXREC(14)) THEN
+        READ(LINE,922,ERR=200) INXSP1(11)
+        RECFLG(14)=1
+C
+C "MAP DIMENSION"
+      ELSEIF (AUXREC.EQ.INXREC(15)) THEN
+        READ(LINE,912,ERR=200) IDIM
+        RECFLG(15)=1
+C
+C "HGT1 / HGT2 / DHGT"
+      ELSEIF (AUXREC.EQ.INXREC(16)) THEN
+        READ(LINE,941,ERR=200) (INXSP1(I),I=12,14)
+941     FORMAT(2X,3F6.1)
+        RECFLG(16)=1
+C
+C "LAT1 / LAT2 / DLAT"
+      ELSEIF (AUXREC.EQ.INXREC(17)) THEN
+        READ(LINE,941,ERR=200) (INXSP1(I),I=4,6)
+        RECFLG(17)=1
+C
+C "LON1 / LON2 / DLON"
+      ELSEIF (AUXREC.EQ.INXREC(18)) THEN
+        READ(LINE,941,ERR=200) (INXSP1(I),I=7,9)
+        RECFLG(18)=1
+C
+C "EXPONENT"
+      ELSEIF (AUXREC.EQ.INXREC(19)) THEN
+        READ(LINE,912,ERR=200) IEXP
+        RECFLG(19)=1
+C
+C AUXILIARY DATA BLOCK FOUND
+      ELSEIF (AUXREC.EQ.INXREC(20)) THEN
+        READ(LINE,931) ADTLB0
+        RECFLG(20)=1
+C
+        NADT=0
+401     CONTINUE
+        READ(LFNLOC,901,END=100) LINE
+        AUXREC=LINE(61:80)
+C
+C SAVE OR SKIP AUX DATA LINES
+        IF (AUXREC.EQ.INXREC(21)) THEN
+          RECFLG(21)=1
+          GOTO 400
+        ELSEIF (AUXREC.EQ.INXREC(3)) THEN
+          GOTO 401
+        ELSEIF (LINE.EQ.' ') THEN
+          GOTO 401
+        ELSEIF (ADTLBL.EQ.ADTLB0) THEN
+          NADT=NADT+1
+          IF (NADT.GT.MAXADT) THEN
+            WRITE(LFNERR,951)
+951         FORMAT(/,' *** SR RDIXHD: TOO MANY AUX DATA LINES',/)
+            IRC=0
+            GOTO 300
+          ENDIF
+          ADTLST(NADT)=LINE
+        ENDIF
+C
+C READ NEXT AUX DATA LINE
+          GOTO 401
+C
+C END OF HEADER FOUND
+      ELSEIF (AUXREC.EQ.INXREC(22)) THEN
+        RECFLG(22)=1
+        GOTO 500
+C
+C SKIP BLANK LINES
+      ELSEIF (LINE.EQ.' ') THEN
+        GOTO 400
+C
+C SKIP UNKNOWN HEADER RECORDS
+      ELSE
+        WRITE(LFNERR,1911) LINE
+1911    FORMAT(/,' ### SR RDIXHD: UNIDENTIFIED IONEX HEADER RECORD',
+     1    /,A80,/)
+        GOTO 400
+      ENDIF
+C
+C READ NEXT HEADER LINE
+C ---------------------
+      GOTO 400
+C
+C CHECK WHETHER ALL NECESSARY IONEX HEADER RECORDS DEFINED
+C --------------------------------------------------------
+500   CONTINUE
+      DO I=1,NUMREC
+        IF (RECFLG(I).EQ.0) THEN
+          WRITE(LFNERR,1921) INXREC(I)
+1921      FORMAT(/,' *** SR RDIXHD: "',A20,'" RECORD MISSING',/)
+          IRC=0
+        ENDIF
+      ENDDO
+C
+      IF (IRC.EQ.0) GOTO 300
+C
+C CHECK SOME IONEX SPECIFICATIONS
+C -------------------------------
+C
+C TIME ARGUMENTS
+      IF (IINT.EQ.0) THEN
+        WRITE(LFNERR,1931)
+1931    FORMAT(/,' *** SR RDIXHD: INTERVAL "0" NOT SUPPORTED',/)
+        IRC=0
+      ELSE
+        IF (NMAP.GT.1) THEN
+          IINT0=IDNINT((INXSP1(2)-INXSP1(1))/(NMAP-1)*86400.D0)
+          IF (IINT.NE.IINT0) THEN
+            WRITE(LFNERR,1932)
+1932        FORMAT(/,' *** SR RDIXHD: INCONSISTENT TIME ARGUMENTS',/)
+            IRC=0
+          ENDIF
+        ENDIF
+      ENDIF
+C
+C SATELLITE SYSTEM
+      IF (SATSTR(1:3).NE.'BEN' .AND.
+     1    SATSTR(1:3).NE.'ENV' .AND.
+     2    SATSTR(1:3).NE.'ERS' .AND.
+     3    SATSTR(1:3).NE.'GEO' .AND.
+     4    SATSTR(1:3).NE.'GLO' .AND.
+     5    SATSTR(1:3).NE.'GNS' .AND.
+     6    SATSTR(1:3).NE.'GPS' .AND.
+     7    SATSTR(1:3).NE.'IRI' .AND.
+     8    SATSTR(1:3).NE.'MIX' .AND.
+     9    SATSTR(1:3).NE.'NNS' .AND.
+     1    SATSTR(1:3).NE.'TOP') THEN
+        WRITE(LFNERR,1933) SATSTR(1:3)
+1933    FORMAT(/,' *** SR RDIXHD: SATELLITE SYSTEM "',A3,'" UNKNOWN',/)
+        IRC=0
+      ENDIF
+C
+C MAPPING FUNCTION
+      IF (MAPSTR.NE.'NONE' .AND.
+     1    MAPSTR.NE.'COSZ' .AND.
+     2    MAPSTR.NE.'QFAC') THEN
+        WRITE(LFNERR,1934) MAPSTR
+1934    FORMAT(/,' *** SR RDIXHD: MAPPING FUNCTION "',A4,'" UNKNOWN',/)
+        IRC=0
+      ENDIF
+C
+C MAP DIMENSION
+      IF (IDIM.EQ.2) THEN
+        IF (INXSP1(12).NE.INXSP1(13) .OR. INXSP1(14).NE.0.D0) THEN
+          WRITE(LFNERR,1935)
+1935      FORMAT(/,' *** SR RDIXHD: ERROR CONCERNING MAP DIMENSION',/)
+          IRC=0
+        ENDIF
+      ELSE
+        IF (INXSP1(12).EQ.INXSP1(13) .OR. INXSP1(14).EQ.0.D0) THEN
+          WRITE(LFNERR,1935)
+          IRC=0
+        ENDIF
+      ENDIF
+C
+C CHECK WHETHER "LAT1", "LAT2", ... ARE MULTIPLES OF "DLAT" AND "DLON"
+      GRDFAC(1)=INXSP1(4)/INXSP1(6)
+      GRDFAC(2)=INXSP1(5)/INXSP1(6)
+      GRDFAC(3)=INXSP1(7)/INXSP1(9)
+      GRDFAC(4)=INXSP1(8)/INXSP1(9)
+      DO I=1,4
+        XDIF=DABS(GRDFAC(I)-DNINT(GRDFAC(I)))
+        IF (XDIF.GT.1.D-4) THEN
+          WRITE(LFNERR,1936)
+1936      FORMAT(/,' *** SR RDIXHD: IRREGULAR IONEX DATA GRID',/)
+          IRC=0
+        ENDIF
+      ENDDO
+C
+C SAVE LABEL OF AUX DATA FOUND
+C ----------------------------
+      IF (ADTLBL.NE.' ' .AND. ADTLBL.NE.ADTLB0) THEN
+        WRITE(LFNERR,1941)
+1941    FORMAT(/,' ### SR RDIXHD: REQUESTED AUX DATA NOT FOUND',/)
+      ENDIF
+C
+      ADTLBL=ADTLB0
+C
+      GOTO 300
+C
+C END OF FILE REACHED
+C -------------------
+100   CONTINUE
+      WRITE(LFNERR,1951)
+1951  FORMAT(/,' *** SR RDIXHD: END OF FILE REACHED',/)
+C
+      IRC=0
+      GOTO 300
+C
+C ERROR READING IONEX FILE
+C ------------------------
+200   CONTINUE
+      WRITE(LFNERR,1952) LINE
+1952  FORMAT(/,' *** SR RDIXHD: ERROR READING IONEX FILE',
+     1  /,A80,/)
+C
+      IRC=0
+      GOTO 300
+C
+C RETURN
+C ------
+300   CONTINUE
+C
+      RETURN
+      END

@@ -1,0 +1,15 @@
+      LFNKBD=  5
+      LFNPRT=  6
+      LFNERR=  6
+      LFN001= 11
+      LFN002=501
+      LFNEPH=990
+      LFNOR1=991
+      LFNRP1=992
+      LFNORB=993
+      LFNRPR=994
+      LFNPLT=995
+      LFNRES=996
+      LFNERF=997
+      LFNPRF=998
+      LFNLOC=999

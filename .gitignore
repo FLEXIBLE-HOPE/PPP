@@ -1,0 +1,40 @@
+# Compiled object files
+*.o
+*.obj
+
+# Fortran module files
+*.mod
+
+# Static libraries
+*.a
+*.lib
+
+# Executables
+OBJ_INTEL/
+*.out
+*.exe
+ppp
+rtorb
+fcb
+oi
+t_sofa_f
+
+# Vendored LAPACK source (build links against Intel MKL instead)
+lapack-3.12.0/
+
+# Compressed archives
+*.zip
+*.tar
+*.tar.gz
+*.tgz
+
+# Log files
+*.log
+log
+
+# VSCode (optional, keep if you want to share settings)
+# .vscode/
+
+# OS files
+.DS_Store
+Thumbs.db

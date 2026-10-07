@@ -1,0 +1,877 @@
+!*
+SUBROUTINE ppp_abfix_fcb_uduc_iar(CKF,SIT,SAT,OB,NM,PM,AM,QM,SL,UPD)
+  !!
+  !*
+  USE info
+  USE ckdctrl
+  USE station
+  USE satellite
+  USE ambiguity
+  USE observation
+  IMPLICIT NONE
+  
+  !*
+  ! The arguments
+  !!------------------------
+  TYPE(CKDCFG) :: CKF
+  TYPE(INFM) :: NM
+  TYPE(PRMT) :: PM(1:*)
+  TYPE(AMBT) :: AM(1:*)
+  TYPE(INVM) :: QM
+  TYPE(SOL) :: SL
+  TYPE(RNXOBS) :: OB
+  TYPE(SATE) :: SAT(MAXSAT)
+  TYPE(SITE) :: SIT
+  TYPE(FCB) :: UPD
+  
+    !*
+    ! The local variables
+    !!-------------------------
+    LOGICAL(LG) :: lfirst
+    INTEGER(IT) :: i,j,k,m,isat,kpt,nfix(MAXSYS),nxl,ndl,maxtim,ifg(MAXSAT),ipt(MAXSAT),isys,ind,ntot,jsat,holdnum(MAXSYS),  iy,imon,id,ih,im,ambset(1:100),del_wl
+    REAL(RL) :: rxl(MAXSAT),wgt(MAXSAT),pxl(MAXSAT),fxl,vxl,sxl,maxele,alpha,rwl,wwl,g1,g2, isec,ratio
+    REAL(RL) :: disall(2),q22(3,3)
+    TYPE(AMBD), POINTER :: AB(:)
+    REAL(RL), ALLOCATABLE :: bias(:),qxx(:),invx(:,:)
+  
+    !*
+    ! Start the exectuable code
+    !!-----------------------------
+    
+    !! prepare auxiliary AB
+    IF (NM%ns .GT. 0) THEN
+      ALLOCATE(AB(NM%ns))
+    ELSE
+      RETURN
+    END IF  
+    ALLOCATE(bias(QM%ntot))
+    ALLOCATE(qxx(QM%ntot*(QM%ntot+1)/2))
+  
+    CALL mjd2date(CKF%mjd,CKF%sod,iy,imon,id,ih,im,isec)
+    WRITE(1004,'((A),I5,4I3,F11.7,I7,F10.2,A6,(A))')'TIM ',iy,imon,id,ih,im,isec,ckf.mjd,ckf.sod,SIT%name,'    TYPE-PRN-NUM-ABST-ABFR-ABFX'
+  
+    DO i=1, NM%ns
+      ! do not hold, or hold but not fix
+      IF (CKF%lamb.EQ..FALSE. .OR. (CKF%lamb.EQ..TRUE. .AND. AM(i)%ifab.LT.2)) THEN
+        AM(i)%abhewl=0.5d0
+        AM(i)%abeewl=0.5d0
+        AM(i)%abewl=0.5d0
+        AM(i)%abwl=0.5d0
+        AM(i)%abnl=0.5d0
+      END IF
+      AB(i)%pab=i
+    END DO
+
+!################################################################################################################################################
+!%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% HEWL    
+    ! To fix the HEWL measurements
+    DO isys=1, CKF%nsys
+  
+      nfix(isys)=0
+      nxl=0
+      ipt=0
+  
+      DO i=1, NM%ns
+        isat=AM(i)%psat
+        IF (CKF%cprn(isat)(1:1) .NE. CKF%system(isys:isys)) CYCLE
+        IF (TRIM(AM(i)%pname) .NE. 'AMBL5') CYCLE
+  
+        IF (CKF%cprn(isat) .EQ. CKF%refcprn(isys)) THEN
+          AB(i)%abst=-1
+          CYCLE
+        END IF
+  
+        IF (AM(i)%iobs.EQ.0 .OR. AM(i)%elev/AM(i)%iobs.LE.CKF%wlcutoff .OR. UPD%hewfcb(isat).EQ.10.d0) THEN
+          AB(i)%abst=-1
+        ELSE
+          !@ CMT BY XSY: THE OLD AMBIGUITY SHOULD NOT BE INCLUDED IN AR
+          IF (CKF%llog .EQ..FALSE.) THEN
+            IF (AM(i)%ptime(2).NE.CKF%mjd+CKF%sod/86400.d0) THEN
+              AB(i)%abst=-1
+              CYCLE
+            END IF
+          END IF    
+          AB(i)%abst=0
+          AB(i)%abfr=AM(i-3)%famb-AM(i)%famb-(UPD%hewfcb(isat)-UPD%hewfcb(CKF%refnprn(isys)))
+        END IF
+      END DO
+  
+    END DO
+  
+    DO isys=1, CKF%nsys
+  
+      nfix(isys)=0
+      holdnum(isys)=0
+      k=0
+      m=0
+      
+      DO i=1, NM%ns
+        
+        IF (TRIM(AM(i)%pname) .NE. 'AMBL5') CYCLE
+        isat=AM(i)%psat
+        IF (CKF%cprn(isat)(1:1) .NE. CKF%system(isys:isys)) CYCLE
+        IF (AB(i)%abst .EQ. -1) CYCLE
+  
+        k=k+1
+        bias(k)=AB(i)%abfr
+        m=m+1
+        qxx(m)=QM%invx(QM%nxyz+i,QM%nxyz+i)
+       
+        DO j=i+1, NM%ns
+          IF (TRIM(AM(j)%pname) .NE. 'AMBL5') CYCLE
+          jsat=AM(j)%psat
+          IF (CKF%cprn(jsat)(1:1) .NE. CKF%system(isys:isys)) CYCLE
+          IF (AB(j)%abst .EQ. -1) CYCLE
+          
+          m=m+1
+          qxx(m)=QM%invx(QM%nxyz+j,QM%nxyz+i)
+        END DO
+      END DO
+    
+      IF (k.EQ.0) CYCLE
+      IF (k.GT.6) del_wl=INT(k*0.5d0)
+      IF (k.LE.6) del_wl=3
+      CALL ppp_abfix_wlpar(k,bias,qxx,del_wl,CKF%wl_ratio,ratio)
+  
+      IF (ratio .GT. CKF%wl_ratio) THEN 
+        k=0
+        DO i=1, NM%ns
+          IF (TRIM(AM(i)%pname) .NE. 'AMBL5') CYCLE
+          isat=AM(i)%psat
+          IF (CKF%cprn(isat)(1:1) .NE. CKF%system(isys:isys)) CYCLE
+          IF (AB(i)%abst .EQ. -1) CYCLE
+          
+          k=k+1
+          
+          IF (abs(int(bias(k))-bias(k)).NE.0.d0) CYCLE
+  
+          nfix(isys)=nfix(isys)+1
+          AB(i)%abfx=bias(k)
+          AB(i)%abst=2
+          AM(i)%ifab=2
+          AM(i)%abhewl=bias(k)
+        END DO
+      END IF
+      
+      IF (CKF%lamb .EQ. .TRUE.) THEN
+        DO i=1, NM%ns
+          IF (TRIM(AM(i)%pname) .NE. 'AMBL5') CYCLE
+          isat=AM(i)%psat
+          IF (CKF%cprn(isat)(1:1) .NE. CKF%system(isys:isys)) CYCLE          
+          IF (AM(i)%ifab .NE. 2) CYCLE
+          IF (AB(i)%abst .EQ. 2) CYCLE
+          !nfix(isys)=nfix(isys)+1
+          holdnum(isys)=holdnum(isys)+1
+          AB(i)%abfx=AM(i)%abhewl
+          AB(i)%abst=2
+        END DO
+      END IF
+    END DO
+  
+    ! L1, WL, EWL and EEWL
+    DO i=1, NM%ns
+      isat=AM(i)%psat
+      IF (TRIM(AM(i)%pname) .EQ. 'AMBL5') CYCLE
+  
+      AB(i)%abst=-1
+      IF (TRIM(AM(i)%pname) .EQ. 'AMBL4') THEN
+        AB(i)%abfr=AM(i-2)%famb-AM(i)%famb
+      ELSE IF (TRIM(AM(i)%pname) .EQ. 'AMBL3') THEN
+        AB(i)%abfr=AM(i-1)%famb-AM(i)%famb
+      ELSE IF(TRIM(AM(i)%pname) .EQ. 'AMBL2') THEN
+        AB(i)%abfr=AM(i-1)%famb-AM(i)%famb
+      ELSE IF (TRIM(AM(i)%pname) .EQ. 'AMBL1') THEN
+        AB(i)%abfr=AM(i)%famb
+      END IF
+    END DO
+    
+    IF (SUM(nfix) .GT. 0) THEN
+    
+      !! place fixed ambiguities at the end                       xsy: 将固定/伪固定(abst=1/2)的模糊度放到Qxx最后,abst=-1/0置于前面
+      CALL ppp_plc_fixed(AB,QM,QM%invx)
+  
+      !! impose constraints from already fixed ambiguities        xsy: 已经固定模糊度(abst=1/2)强加约束，对非模糊度参数和非模糊度参数进行修正，并消除固定的模糊度
+      CALL ppp_add_ambcon(PM,AB,QM,QM%invx)
+  
+      !! place precise ambiguities at the end                     xsy: 把确定的模糊度放在后面，其他类型模糊度包括abst=-1多余或者未固定放前面，abst=0未固定偏后
+      CALL ppp_plc_float(AB,QM,QM%invx)
+    END IF
+    
+!################################################################################################################################################
+!%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% EEWL       
+    ! To fix the EEWL measurements
+    DO isys=1, CKF%nsys
+    
+      nfix(isys)=0
+      nxl=0
+      ipt=0
+      DO i=1, QM%ntot-QM%nxyz
+        ind=AB(i)%pab
+        isat=AM(ind)%psat
+        
+        IF (CKF%cprn(isat)(1:1) .NE. CKF%system(isys:isys)) CYCLE
+  
+        IF (TRIM(AM(ind)%pname) .NE. 'AMBL4') CYCLE
+  
+        IF (CKF%cprn(isat) .EQ. CKF%refcprn(isys)) THEN
+          AB(i)%abst=-1
+          CYCLE
+        END IF
+  
+        IF (AM(ind)%iobs.EQ.0 .OR. AM(ind)%elev/AM(ind)%iobs.LE.CKF%wlcutoff .OR. UPD%eewfcb(isat).EQ.10.d0) THEN
+          AB(i)%abst=-1
+        ELSE       
+          !@ CMT BY XSY: THE OLD AMBIGUITY SHOULD NOT BE INCLUDED IN AR
+          IF (CKF%llog .EQ..FALSE.) THEN
+            IF (AM(ind)%ptime(2).NE.CKF%mjd+CKF%sod/86400.d0) THEN
+              AB(i)%abst=-1
+              CYCLE
+            END IF
+          END IF          
+          AB(i)%abst=0
+          AB(i)%abfr=AB(i)%abfr-(UPD%eewfcb(isat)-UPD%eewfcb(CKF%refnprn(isys)))
+        END IF
+      END DO
+  
+    END DO
+  
+    DO isys=1, CKF%nsys
+  
+      nfix(isys)=0
+      holdnum(isys)=0
+      k=0
+      m=0
+          
+      DO i=1, QM%ntot-QM%nxyz
+        ind=AB(i)%pab
+        isat=AM(ind)%psat
+        IF (TRIM(AM(ind)%pname) .NE. 'AMBL4') CYCLE
+        IF (CKF%cprn(isat)(1:1) .NE. CKF%system(isys:isys)) CYCLE
+        IF (AB(i)%abst .EQ. -1) CYCLE
+  
+        k=k+1
+  
+        bias(k)=AB(i)%abfr
+  
+        m=m+1
+        qxx(m)=QM%invx(QM%nxyz+i,QM%nxyz+i)
+  
+        DO j=i+1, QM%ntot-QM%nxyz
+          ind=AB(j)%pab
+          jsat=AM(ind)%psat      
+          IF (TRIM(AM(ind)%pname) .NE. 'AMBL4') CYCLE
+          IF (CKF%cprn(jsat)(1:1) .NE. CKF%system(isys:isys)) CYCLE
+          IF (AB(j)%abst .EQ. -1) CYCLE
+          
+          m=m+1
+          qxx(m)=QM%invx(QM%nxyz+j,QM%nxyz+i)
+        END DO
+      END DO
+    
+      IF (k.EQ.0) CYCLE
+      IF (k.GT.6) del_wl=INT(k*0.5d0)
+      IF (k.LE.6) del_wl=3
+      CALL ppp_abfix_wlpar(k,bias,qxx,del_wl,CKF%wl_ratio,ratio)
+      
+      IF (ratio .GT. CKF%wl_ratio) THEN
+        k=0
+        DO i=1, QM%ntot-QM%nxyz
+          ind=AB(i)%pab
+          isat=AM(ind)%psat
+          IF (TRIM(AM(ind)%pname) .NE. 'AMBL4') CYCLE
+          IF (CKF%cprn(isat)(1:1) .NE. CKF%system(isys:isys)) CYCLE
+          IF (AB(i)%abst .EQ. -1) CYCLE
+          
+          k=k+1
+  
+          IF (abs(int(bias(k))-bias(k)).NE.0.d0) CYCLE
+            
+          nfix(isys)=nfix(isys)+1
+          AB(i)%abfx=bias(k)
+          AB(i)%abst=2  
+          AM(ind)%ifab=2  
+          AM(ind)%abeewl=bias(k)
+        END DO
+      END IF
+      
+      IF (CKF%lamb .EQ. .TRUE.) THEN
+        DO i=1, QM%ntot-QM%nxyz
+          ind=AB(i)%pab
+          isat=AM(ind)%psat
+          IF (CKF%cprn(isat)(1:1) .NE. CKF%system(isys:isys)) CYCLE
+          IF (TRIM(AM(ind)%pname) .NE. 'AMBL4') CYCLE
+          IF (AM(ind)%ifab .NE. 2) CYCLE
+          IF (AB(i)%abst .EQ. 2) CYCLE
+          !nfix(isys)=nfix(isys)+1
+          holdnum(isys)=holdnum(isys)+1
+          AB(i)%abfx=AM(ind)%abeewl   
+          AB(i)%abst=2
+        END DO
+      END IF    
+    END DO
+  
+    DO i=1, QM%ntot-QM%nxyz
+      ind=AB(i)%pab
+      isat=AM(ind)%psat      
+      IF (TRIM(AM(ind)%pname) .EQ. 'AMBL4') CYCLE
+      AB(i)%abst=-1
+    END DO
+  
+    IF (SUM(nfix) .GT. 0) THEN
+    
+      !! place fixed ambiguities at the end                   xsy: 固定的模糊度放到最后，abst=1或者2
+      CALL ppp_plc_fixed(AB,QM,QM%invx)
+  
+      !! impose constraints from already fixed ambiguities    xsy: 固定的模糊度强加约束，计算偏差值并对参数表估值矫正，最后删除已固定模糊度
+      CALL ppp_add_ambcon(PM,AB,QM,QM%invx)
+  
+      !! place precise ambiguities at the end                 xsy: 将确定模糊度放到最后,多余模糊度最靠前(abst=-1)
+      CALL ppp_plc_float(AB,QM,QM%invx)
+    END IF
+
+!################################################################################################################################################
+!%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% EWL       
+    ! To fix the EWL measurements
+    DO isys=1, CKF%nsys
+    
+      nfix(isys)=0
+      nxl=0
+      ipt=0
+      DO i=1, QM%ntot-QM%nxyz
+        ind=AB(i)%pab
+        isat=AM(ind)%psat
+        
+        IF (CKF%cprn(isat)(1:1) .NE. CKF%system(isys:isys)) CYCLE
+  
+        IF (TRIM(AM(ind)%pname) .NE. 'AMBL3') CYCLE
+  
+        IF (CKF%cprn(isat) .EQ. CKF%refcprn(isys)) THEN
+          AB(i)%abst=-1
+          CYCLE
+        END IF
+  
+        IF (AM(ind)%iobs.EQ.0 .OR. AM(ind)%elev/AM(ind)%iobs.LE.CKF%wlcutoff .OR. UPD%ewfcb(isat).EQ.10.d0) THEN
+          AB(i)%abst=-1
+        ELSE       
+          !@ CMT BY XSY: THE OLD AMBIGUITY SHOULD NOT BE INCLUDED IN AR
+          IF (CKF%llog .EQ..FALSE.) THEN
+            IF (AM(ind)%ptime(2).NE.CKF%mjd+CKF%sod/86400.d0) THEN
+              AB(i)%abst=-1
+              CYCLE
+            END IF
+          END IF           
+          AB(i)%abst=0         
+          AB(i)%abfr=AB(i)%abfr-(UPD%ewfcb(isat)-UPD%ewfcb(CKF%refnprn(isys)))
+        END IF
+      END DO
+  
+    END DO
+  
+    DO isys=1, CKF%nsys
+  
+      nfix(isys)=0
+      holdnum(isys)=0
+      k=0
+      m=0
+          
+      DO i=1, QM%ntot-QM%nxyz
+        ind=AB(i)%pab
+        isat=AM(ind)%psat
+        IF (TRIM(AM(ind)%pname) .NE. 'AMBL3') CYCLE
+        IF (CKF%cprn(isat)(1:1) .NE. CKF%system(isys:isys)) CYCLE
+        IF (AB(i)%abst .EQ. -1) CYCLE
+  
+        k=k+1
+  
+        bias(k)=AB(i)%abfr
+  
+        m=m+1
+        qxx(m)=QM%invx(QM%nxyz+i,QM%nxyz+i)
+  
+        DO j=i+1, QM%ntot-QM%nxyz
+          ind=AB(j)%pab
+          jsat=AM(ind)%psat      
+          IF (TRIM(AM(ind)%pname) .NE. 'AMBL3') CYCLE
+          IF (CKF%cprn(jsat)(1:1) .NE. CKF%system(isys:isys)) CYCLE
+          IF (AB(j)%abst .EQ. -1) CYCLE
+          
+          m=m+1
+          qxx(m)=QM%invx(QM%nxyz+j,QM%nxyz+i)
+        END DO
+      END DO
+    
+      IF (k.EQ.0) CYCLE
+      IF (k.GT.6) del_wl=INT(k*0.5d0)
+      IF (k.LE.6) del_wl=3
+      CALL ppp_abfix_wlpar(k,bias,qxx,del_wl,CKF%wl_ratio,ratio)
+      
+      IF (ratio .GT. CKF%wl_ratio) THEN
+        k=0
+        DO i=1, QM%ntot-QM%nxyz
+          ind=AB(i)%pab
+          isat=AM(ind)%psat
+          IF (TRIM(AM(ind)%pname) .NE. 'AMBL3') CYCLE
+          IF (CKF%cprn(isat)(1:1) .NE. CKF%system(isys:isys)) CYCLE
+          IF (AB(i)%abst .EQ. -1) CYCLE
+          
+          k=k+1
+  
+          IF (abs(int(bias(k))-bias(k)).NE.0.d0) CYCLE
+            
+          nfix(isys)=nfix(isys)+1
+          AB(i)%abfx=bias(k)
+          AB(i)%abst=2  
+          AM(ind)%ifab=2  
+          AM(ind)%abewl=bias(k)
+        END DO
+      END IF
+      
+      IF (CKF%lamb .EQ. .TRUE.) THEN
+        DO i=1, QM%ntot-QM%nxyz
+          ind=AB(i)%pab
+          isat=AM(ind)%psat
+          IF (CKF%cprn(isat)(1:1) .NE. CKF%system(isys:isys)) CYCLE
+          IF (TRIM(AM(ind)%pname) .NE. 'AMBL3') CYCLE
+          IF (AM(ind)%ifab .NE. 2) CYCLE
+          IF (AB(i)%abst .EQ. 2) CYCLE
+          !nfix(isys)=nfix(isys)+1
+          holdnum(isys)=holdnum(isys)+1
+          AB(i)%abfx=AM(ind)%abewl   
+          AB(i)%abst=2
+        END DO
+      END IF    
+    END DO
+  
+    SL%fixnum_ewl = 0
+    SL%fix_ewl = 0
+    IF (SUM(nfix) .GT. 0) THEN
+      SL%fix_ewl = 1
+      SL%fixnum_ewl = SUM(nfix)
+    END IF
+  
+    DO i=1, QM%ntot-QM%nxyz
+      ind=AB(i)%pab
+      isat=AM(ind)%psat      
+      IF (TRIM(AM(ind)%pname) .EQ. 'AMBL3') CYCLE
+      AB(i)%abst=-1
+    END DO
+  
+    IF (SUM(nfix) .GT. 0) THEN
+    
+      !! place fixed ambiguities at the end                   xsy: 固定的模糊度放到最后，abst=1或者2
+      CALL ppp_plc_fixed(AB,QM,QM%invx)
+  
+      !! impose constraints from already fixed ambiguities    xsy: 固定的模糊度强加约束，计算偏差值并对参数表估值矫正，最后删除已固定模糊度
+      CALL ppp_add_ambcon(PM,AB,QM,QM%invx)
+  
+      !! place precise ambiguities at the end                 xsy: 将确定模糊度放到最后,多余模糊度最靠前(abst=-1)
+      CALL ppp_plc_float(AB,QM,QM%invx)
+    END IF
+
+!################################################################################################################################################
+!%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% WL       
+    ! To fix the WL measurements
+    DO isys=1, CKF%nsys
+    
+      nfix(isys)=0
+      nxl=0
+      ipt=0
+      DO i=1, QM%ntot-QM%nxyz
+        ind=AB(i)%pab
+        isat=AM(ind)%psat
+        
+        IF (CKF%cprn(isat)(1:1) .NE. CKF%system(isys:isys)) CYCLE
+  
+        IF (TRIM(AM(ind)%pname) .NE. 'AMBL2') CYCLE
+  
+        IF (CKF%cprn(isat) .EQ. CKF%refcprn(isys)) THEN
+          AB(i)%abst=-1
+          CYCLE
+        END IF
+  
+        IF (AM(ind)%iobs.EQ.0 .OR. AM(ind)%elev/AM(ind)%iobs.LE.CKF%wlcutoff .OR. UPD%wfcb(isat).EQ.10.d0) THEN
+          AB(i)%abst=-1
+        ELSE       
+          !@ CMT BY XSY: THE OLD AMBIGUITY SHOULD NOT BE INCLUDED IN AR
+          IF (CKF%llog .EQ..FALSE.) THEN
+            IF (AM(ind)%ptime(2).NE.CKF%mjd+CKF%sod/86400.d0) THEN
+              AB(i)%abst=-1
+              CYCLE
+            END IF
+          END IF          
+          AB(i)%abst=0
+          AB(i)%abfr=AB(i)%abfr-(UPD%wfcb(isat)-UPD%wfcb(CKF%refnprn(isys)))
+        END IF
+      END DO
+  
+    END DO
+  
+    DO isys=1, CKF%nsys
+  
+      nfix(isys)=0
+      holdnum(isys)=0
+      k=0
+      m=0
+          
+      DO i=1, QM%ntot-QM%nxyz
+        ind=AB(i)%pab
+        isat=AM(ind)%psat
+        IF (TRIM(AM(ind)%pname) .NE. 'AMBL2') CYCLE
+        IF (CKF%cprn(isat)(1:1) .NE. CKF%system(isys:isys)) CYCLE
+        IF (AB(i)%abst .EQ. -1) CYCLE
+  
+        k=k+1
+  
+        bias(k)=AB(i)%abfr
+  
+        m=m+1
+        qxx(m)=QM%invx(QM%nxyz+i,QM%nxyz+i)
+  
+        DO j=i+1, QM%ntot-QM%nxyz
+          ind=AB(j)%pab
+          jsat=AM(ind)%psat      
+          IF (TRIM(AM(ind)%pname) .NE. 'AMBL2') CYCLE
+          IF (CKF%cprn(jsat)(1:1) .NE. CKF%system(isys:isys)) CYCLE
+          IF (AB(j)%abst .EQ. -1) CYCLE
+          
+          m=m+1
+          qxx(m)=QM%invx(QM%nxyz+j,QM%nxyz+i)
+        END DO
+      END DO
+    
+      IF (k.EQ.0) CYCLE
+      IF (k.GT.6) del_wl=INT(k*0.5d0)
+      IF (k.LE.6) del_wl=3
+      CALL ppp_abfix_wlpar(k,bias,qxx,del_wl,CKF%wl_ratio,ratio)
+      
+      IF (ratio .GT. CKF%wl_ratio) THEN
+        k=0
+        DO i=1, QM%ntot-QM%nxyz
+          ind=AB(i)%pab
+          isat=AM(ind)%psat
+          IF (TRIM(AM(ind)%pname) .NE. 'AMBL2') CYCLE
+          IF (CKF%cprn(isat)(1:1) .NE. CKF%system(isys:isys)) CYCLE
+          IF (AB(i)%abst .EQ. -1) CYCLE
+          
+          k=k+1
+  
+          IF (abs(int(bias(k))-bias(k)).NE.0.d0) CYCLE
+            
+          nfix(isys)=nfix(isys)+1
+          AB(i)%abfx=bias(k)
+          AB(i)%abst=2  
+          AM(ind)%ifab=2  
+          AM(ind)%abwl=bias(k)
+        END DO
+      END IF
+      
+      IF (CKF%lamb .EQ. .TRUE.) THEN
+        DO i=1, QM%ntot-QM%nxyz
+          ind=AB(i)%pab
+          isat=AM(ind)%psat
+          IF (CKF%cprn(isat)(1:1) .NE. CKF%system(isys:isys)) CYCLE
+          IF (TRIM(AM(ind)%pname) .NE. 'AMBL2') CYCLE
+          IF (AM(ind)%ifab .NE. 2) CYCLE
+          IF (AB(i)%abst .EQ. 2) CYCLE
+          !nfix(isys)=nfix(isys)+1
+          holdnum(isys)=holdnum(isys)+1
+          AB(i)%abfx=AM(ind)%abwl   
+          AB(i)%abst=2
+        END DO
+      END IF    
+    END DO
+  
+    SL%fixnum_wl = 0
+    SL%fix_wl = 0
+    IF (SUM(nfix) .GT. 0) THEN
+      SL%fix_wl = 1
+      SL%fixnum_wl = SUM(nfix)
+    END IF
+  
+    DO i=1, QM%ntot-QM%nxyz
+      ind=AB(i)%pab
+      isat=AM(ind)%psat      
+      IF (TRIM(AM(ind)%pname) .EQ. 'AMBL2') CYCLE
+      AB(i)%abst=-1
+    END DO
+  
+    IF (SUM(nfix) .GT. 0) THEN
+    
+      !! place fixed ambiguities at the end                   xsy: 固定的模糊度放到最后，abst=1或者2
+      CALL ppp_plc_fixed(AB,QM,QM%invx)
+  
+      !! impose constraints from already fixed ambiguities    xsy: 固定的模糊度强加约束，计算偏差值并对参数表估值矫正，最后删除已固定模糊度
+      CALL ppp_add_ambcon(PM,AB,QM,QM%invx)
+  
+      !! place precise ambiguities at the end                 xsy: 将确定模糊度放到最后,多余模糊度最靠前(abst=-1)
+      CALL ppp_plc_float(AB,QM,QM%invx)
+    END IF
+
+!################################################################################################################################################
+!%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% NL   
+  !! to obtain the narrow lane
+  DO isys=1, CKF%nsys
+
+    nfix(isys)=0
+    nxl=0
+    ipt=0
+    kpt=0    
+
+    DO i=1, QM%ntot-QM%nxyz
+      ind=AB(i)%pab
+      isat=AM(ind)%psat
+      IF (CKF%cprn(isat)(1:1) .NE. CKF%system(isys:isys)) CYCLE
+
+      IF (TRIM(AM(ind)%pname) .NE. 'AMBL1') CYCLE
+
+      IF (CKF%cprn(isat) .EQ. CKF%refcprn(isys)) THEN
+        AB(i)%abst=-1
+        CYCLE
+      END IF
+      
+      g1=SAT(isat)%freq(1)/(SAT(isat)%freq(1)-SAT(isat)%freq(2))
+      g2=SAT(isat)%freq(2)/(SAT(isat)%freq(1)-SAT(isat)%freq(2))
+
+      IF (AM(ind)%iobs.EQ.0 .OR. AM(ind)%elev/AM(ind)%iobs.LE.CKF%cutoff .OR. AM(ind+1)%ifab.NE.2 .OR. AM(ind+1)%abwl.EQ.0.5D0 .OR. UPD%nfcb(isat).EQ.10.d0) THEN
+        AB(i)%abst=-1
+      ELSE
+        !@CMT BY XSY: FOR GPS TRIP-FREQUENCY, THE NL WILL NOT BE FIXED
+        ! IF (CKF%cprn(isat)(1:1).EQ.'G') THEN
+        !   IF (CKF%nfreq(INDEX(SYS,'G')).EQ.3 .AND. OB%omc(isat,3).EQ.0.D0) THEN
+        !     AB(i)%abst=-1
+        !     CYCLE
+        !   END IF
+        ! END IF
+
+        !@ CMT BY XSY: THE OLD AMBIGUITY SHOULD NOT BE INCLUDED IN AR
+        IF (CKF%llog .EQ..FALSE.) THEN
+          IF (AM(ind)%ptime(2).NE.CKF%mjd+CKF%sod/86400.d0) THEN
+            AB(i)%abst=-1
+            CYCLE
+          END IF
+        END IF
+
+        AB(i)%abst=0
+        AB(i)%abfr=g1*(AB(i)%abfr)-g2*(AB(i)%abfr-NINT(AM(j+1)%abwl)-(UPD%wfcb(isat)-UPD%wfcb(CKF%refnprn(isys))))-1.d0/(SAT(isat)%g-1.d0)*(NINT(AM(j+1)%abwl))-(UPD%nfcb(isat)-UPD%nfcb(CKF%refnprn(isys)))
+
+        IF (AM(ind)%ifab .EQ. 2) THEN 
+          nfix(isys)=nfix(isys)+1
+          AB(i)%abst=1     
+          AB(i)%abfx=AM(ind)%abnl
+        END IF
+      END IF
+      
+    END DO
+
+  END DO
+
+  ! To fixed the NL
+  DO i=QM%nxyz+1, QM%ntot
+    ind=AB(i-QM%nxyz)%pab
+    isat=AM(ind)%psat
+
+    IF (TRIM(AM(ind)%pname) .EQ. 'AMBL1' .AND. AM(ind+1)%ifab.EQ.2) CYCLE
+    AB(i-QM%nxyz)%abst=-1
+  END DO
+
+  !! narrow-lane ambiguity fixing
+  SL%ncad =0
+  SL%nfix =0
+  SL%ratio=0.d0
+  IF (SUM(nfix) .GE. 0) THEN     !nfix:hold的NL
+    !! The following code is to get the value and variance for the      xsy: 如果某些模糊度固定后，则通过以下代码获取未固定模糊度的值和方差
+    !! unfixed ambiguities if there are some ambiguities are fixed      xsy: 将hold的窄巷固定住先
+
+    !! place fixed ambiguities at the end
+    CALL ppp_plc_fixed(AB,QM,QM%invx)
+
+    !! impose constraints from already fixed ambiguities
+    CALL ppp_add_ambcon(PM,AB,QM,QM%invx)                               !xsy: hold住的窄巷作为约束，并将固定的模糊度剔除
+
+    !! place precise ambiguities at the end
+    CALL ppp_plc_float(AB,QM,QM%invx)                                   !xsy: 将剩余abst=0的未固定的模糊度调整到最后，abst=-1多余模糊度放在前面
+    
+    !! ambiguity resolution using LAMBDA method
+    SL%ncad=QM%ndam+QM%nfix                                             !xsy: QM%nfix:窄巷hold的模糊度或参考模糊度(高度角最大)   QM%ndam:剩下的窄巷模糊度个数
+
+    IF (QM%ndam .GE. CKF%nl_minsav) THEN            !xsy: 剩下NL数量太少，反倒更容易固定错
+   
+      ! CALL ppp_abfix_lambda(AB,QM,QM%invx,CKF%nl_maxdel,CKF%nl_minsav,CKF%nl_ratio,SL%ratio)
+      IF (SL%ncad.GE.20 .AND. CKF.nl_ratio.GT.1.2D0) THEN
+        CALL ppp_abfix_lambda(AB,QM,QM%invx,CKF%nl_maxdel,CKF%nl_minsav,1.2D0,SL%ratio)
+      ELSE
+        CALL ppp_abfix_lambda(AB,QM,QM%invx,CKF%nl_maxdel,CKF%nl_minsav,CKF%nl_ratio,SL%ratio)
+      END IF
+
+      !! store fixed widelane, NL too little, easy bad
+      IF (QM%ncad .GT. 0) THEN
+        SL%nfix=QM%ncad+QM%nfix
+
+        !! sort inverted normal matrix
+        CALL ppp_plc_fixed(AB,QM,QM%invx)
+
+        !! further apply newly fixed widelane
+        CALL ppp_add_ambcon(PM,AB,QM,QM%invx)
+      END IF
+
+      !! record ambiguity information
+      DO i=1, NM%ns
+        ind=AB(i)%pab
+        IF (AB(i)%abst.EQ.1 .OR. AB(i)%abst.EQ.2 .AND. QM%ncad.GT.0) THEN
+          IF (TRIM(AM(ind)%pname).NE.'AMBL1') CYCLE
+          SIT%nfixnl=SIT%nfixnl+1
+          IF (CKF%lamb.EQ..TRUE. .AND. AM(ind)%ifab.EQ.2) CYCLE
+          AM(ind)%ifab=2 
+          AM(ind)%abnl=AB(i)%abfx
+        ELSE
+          AM(ind)%abnl=AB(i)%abfr
+        END IF
+      END DO
+    ! PAR failed
+    ELSE
+      IF (CKF%lamb .EQ. .TRUE.) THEN
+        !! JG: output issues, to be sloved
+        SL%nfix=QM%nfix
+        DO i=1, NM%ns
+          IF (AB(i)%abst.EQ.1 .OR. AB(i)%abst.EQ.2) THEN
+            SIT%nfixnl=SIT%nfixnl+1
+          END IF
+        END DO
+      END IF
+    END IF    
+    
+  END IF  
+
+  SL%fix_nl = 0
+  SL%fixnum_nl = SIT%nfixnl
+  IF (SIT%nfixnl .GT. 4) THEN
+    SL%fix_nl = 1
+  END IF
+
+!******************************************************** OUTPUT ********************************************************!
+    WRITE(1004,'(A)')'+--TYPE-----PRN---IND--ABST------ELEV-----ELEV0------ABFR------ABFX--CMT--------+'
+    k=0
+    DO i=1, NM%ns
+      IF (TRIM(AM(AB(i)%pab)%pname).NE.'AMBL5') CYCLE
+      k=k+1
+      ind=AB(i)%pab
+      isat=AM(ind)%psat
+      isys = INDEX(CKF%system,CKF%cprn(isat)(1:1))
+      IF (CKF%llog .EQ..FALSE. .AND. AM(ind)%ptime(2).NE.CKF%mjd+CKF%sod/86400.d0) CYCLE
+      IF (CKF%cprn(isat) .EQ. CKF%refcprn(isys)) THEN
+        WRITE(1004,'((A),A6,2I6,4F10.3,(A))') 'FCB_HEWL: ',CKF%cprn(isat),k,AB(i)%abst,AM(ind)%elev/AM(ind)%iobs,CKF%wlcutoff,AB(i)%abfr,AB(i)%abfx,'  REF_SAT'
+      END IF
+      IF (AB(i)%abst .EQ. 2) THEN
+        WRITE(1004,'((A),A6,2I6,4F10.3,(A))') 'FCB_HEWL: ',CKF%cprn(isat),k,AB(i)%abst,AM(ind)%elev/AM(ind)%iobs,CKF%wlcutoff,AB(i)%abfr,AB(i)%abfx,'  FIX_HEWL'
+      END IF
+      IF (CKF%cprn(isat) .NE. CKF%refcprn(isys) .AND. AB(i)%abst .NE. 2) THEN
+        IF (INDEX(CKF%nofixsat,CKF%cprn(isat)) .NE. 0) THEN
+          WRITE(1004,'((A),A6,2I6,4F10.3,(A))') 'FCB_HEWL: ',    CKF%cprn(isat),k,AB(i)%abst,AM(ind)%elev/AM(ind)%iobs,CKF%wlcutoff,AB(i)%abfr,AB(i)%abfx,'  NO_PhaseFCB'
+        ELSE
+          WRITE(1004,'((A),A6,2I6,4F10.3)') 'FCB_HEWL: ',    CKF%cprn(isat),k,AB(i)%abst,AM(ind)%elev/AM(ind)%iobs,CKF%wlcutoff,AB(i)%abfr,AB(i)%abfx
+        END IF
+      END IF
+    END DO
+
+    k=0
+    DO i=1, NM%ns
+      IF (TRIM(AM(AB(i)%pab)%pname).NE.'AMBL4') CYCLE
+      k=k+1
+      ind=AB(i)%pab
+      isat=AM(ind)%psat
+      isys = INDEX(CKF%system,CKF%cprn(isat)(1:1))
+      IF (CKF%llog .EQ..FALSE. .AND. AM(ind)%ptime(2).NE.CKF%mjd+CKF%sod/86400.d0) CYCLE
+      IF (CKF%cprn(isat) .EQ. CKF%refcprn(isys)) THEN
+        WRITE(1004,'((A),A6,2I6,4F10.3,(A))') 'FCB_EEWL: ',CKF%cprn(isat),k,AB(i)%abst,AM(ind)%elev/AM(ind)%iobs,CKF%wlcutoff,AB(i)%abfr,AB(i)%abfx,'  REF_SAT'
+      END IF
+      IF (AB(i)%abst .EQ. 2) THEN
+        WRITE(1004,'((A),A6,2I6,4F10.3,(A))') 'FCB_EEWL: ',CKF%cprn(isat),k,AB(i)%abst,AM(ind)%elev/AM(ind)%iobs,CKF%wlcutoff,AB(i)%abfr,AB(i)%abfx,'  FIX_EEWL'
+      END IF
+      IF (CKF%cprn(isat) .NE. CKF%refcprn(isys) .AND. AB(i)%abst .NE. 2) THEN
+        IF (INDEX(CKF%nofixsat,CKF%cprn(isat)) .NE. 0) THEN
+          WRITE(1004,'((A),A6,2I6,4F10.3,(A))') 'FCB_EEWL: ',    CKF%cprn(isat),k,AB(i)%abst,AM(ind)%elev/AM(ind)%iobs,CKF%wlcutoff,AB(i)%abfr,AB(i)%abfx,'  NO_PhaseFCB'
+        ELSE
+          WRITE(1004,'((A),A6,2I6,4F10.3)') 'FCB_EEWL: ',    CKF%cprn(isat),k,AB(i)%abst,AM(ind)%elev/AM(ind)%iobs,CKF%wlcutoff,AB(i)%abfr,AB(i)%abfx
+        END IF
+      END IF
+    END DO
+
+    k=0
+    DO i=1, NM%ns
+      IF (TRIM(AM(AB(i)%pab)%pname).NE.'AMBL3') CYCLE
+      k=k+1
+      ind=AB(i)%pab
+      isat=AM(ind)%psat
+      isys = INDEX(CKF%system,CKF%cprn(isat)(1:1))
+      IF (CKF%llog .EQ..FALSE. .AND. AM(ind)%ptime(2).NE.CKF%mjd+CKF%sod/86400.d0) CYCLE
+      IF (CKF%cprn(isat) .EQ. CKF%refcprn(isys)) THEN
+        WRITE(1004,'((A),A6,2I6,4F10.3,(A))') 'FCB_EWL: ',CKF%cprn(isat),k,AB(i)%abst,AM(ind)%elev/AM(ind)%iobs,CKF%wlcutoff,AB(i)%abfr,AB(i)%abfx,'  REF_SAT'
+      END IF
+      IF (AB(i)%abst .EQ. 2) THEN
+        WRITE(1004,'((A),A6,2I6,4F10.3,(A))') 'FCB_EWL: ',CKF%cprn(isat),k,AB(i)%abst,AM(ind)%elev/AM(ind)%iobs,CKF%wlcutoff,AB(i)%abfr,AB(i)%abfx,'  FIX_EWL'
+      END IF
+      IF (CKF%cprn(isat) .NE. CKF%refcprn(isys) .AND. AB(i)%abst .NE. 2) THEN
+        IF (INDEX(CKF%nofixsat,CKF%cprn(isat)) .NE. 0) THEN
+          WRITE(1004,'((A),A6,2I6,4F10.3,(A))') 'FCB_EWL: ',    CKF%cprn(isat),k,AB(i)%abst,AM(ind)%elev/AM(ind)%iobs,CKF%wlcutoff,AB(i)%abfr,AB(i)%abfx,'  NO_PhaseFCB'
+        ELSE
+          WRITE(1004,'((A),A6,2I6,4F10.3)') 'FCB_EWL: ',    CKF%cprn(isat),k,AB(i)%abst,AM(ind)%elev/AM(ind)%iobs,CKF%wlcutoff,AB(i)%abfr,AB(i)%abfx
+        END IF
+      END IF
+    END DO
+
+    k=0
+    DO i=1, NM%ns
+      IF (TRIM(AM(AB(i)%pab)%pname).NE.'AMBL2') CYCLE
+      k=k+1
+      ind=AB(i)%pab
+      isat=AM(ind)%psat
+      isys = INDEX(CKF%system,CKF%cprn(isat)(1:1))
+      IF (CKF%llog .EQ..FALSE. .AND. AM(ind)%ptime(2).NE.CKF%mjd+CKF%sod/86400.d0) CYCLE
+      IF (CKF%cprn(isat) .EQ. CKF%refcprn(isys)) THEN
+        WRITE(1004,'((A),A6,2I6,4F10.3,(A))') ' FCB_WL: ',CKF%cprn(isat),k,AB(i)%abst,AM(ind)%elev/AM(ind)%iobs,CKF%wlcutoff,AB(i)%abfr,AB(i)%abfx,'  REF_SAT'
+      END IF
+      IF (AB(i)%abst .EQ. 2) THEN
+        WRITE(1004,'((A),A6,2I6,4F10.3,(A))') ' FCB_WL: ',CKF%cprn(isat),k,AB(i)%abst,AM(ind)%elev/AM(ind)%iobs,CKF%wlcutoff,AB(i)%abfr,AB(i)%abfx,'  FIX_WL'
+      END IF
+      IF (CKF%cprn(isat) .NE. CKF%refcprn(isys) .AND. AB(i)%abst .NE. 2) THEN
+        IF (INDEX(CKF%nofixsat,CKF%cprn(isat)) .NE. 0) THEN
+          WRITE(1004,'((A),A6,2I6,4F10.3,(A))') ' FCB_WL: ',    CKF%cprn(isat),k,AB(i)%abst,AM(ind)%elev/AM(ind)%iobs,CKF%wlcutoff,AB(i)%abfr,AB(i)%abfx,'  NO_PhaseFCB'
+        ELSE
+          WRITE(1004,'((A),A6,2I6,4F10.3)') ' FCB_WL: ',    CKF%cprn(isat),k,AB(i)%abst,AM(ind)%elev/AM(ind)%iobs,CKF%wlcutoff,AB(i)%abfr,AB(i)%abfx
+        END IF
+      END IF
+    END DO
+
+    k=0
+    DO i=1, NM%ns
+      IF (TRIM(AM(AB(i)%pab)%pname).NE.'AMBL1') CYCLE
+      k=k+1
+      ind=AB(i)%pab
+      isat=AM(ind)%psat
+      isys = INDEX(CKF%system,CKF%cprn(isat)(1:1))
+      IF (CKF%llog .EQ..FALSE. .AND. AM(ind)%ptime(2).NE.CKF%mjd+CKF%sod/86400.d0) CYCLE
+      IF (CKF%cprn(isat) .EQ. CKF%refcprn(isys)) THEN
+        WRITE(1004,'((A),A6,2I6,4F10.3,(A))') ' FCB_NL: ',CKF%cprn(isat),k,AB(i)%abst,AM(ind)%elev/AM(ind)%iobs,CKF%cutoff,AB(i)%abfr,AB(i)%abfx,'  REF_SAT'
+      END IF
+      IF (AB(i)%abst.EQ.1 .OR. AB(i)%abst.EQ.2) THEN
+        WRITE(1004,'((A),A6,2I6,4F10.3,(A))') ' FCB_NL: ',CKF%cprn(isat),k,AB(i)%abst,AM(ind)%elev/AM(ind)%iobs,CKF%cutoff,AB(i)%abfr,AB(i)%abfx,'  FIX_NL'
+      END IF
+      IF (CKF%cprn(isat) .NE. CKF%refcprn(isys) .AND. AB(i)%abst .LE. 0) THEN
+        IF (INDEX(CKF%nofixsat,CKF%cprn(isat)) .NE. 0) THEN
+          WRITE(1004,'((A),A6,2I6,4F10.3,(A))') ' FCB_NL: ',    CKF%cprn(isat),k,AB(i)%abst,AM(ind)%elev/AM(ind)%iobs,CKF%cutoff,AB(i)%abfr,AB(i)%abfx,'  NO_PhaseFCB'
+        ELSE
+          WRITE(1004,'((A),A6,2I6,4F10.3)') ' FCB_NL: ',    CKF%cprn(isat),k,AB(i)%abst,AM(ind)%elev/AM(ind)%iobs,CKF%cutoff,AB(i)%abfr,AB(i)%abfx
+        END IF
+      END IF
+    END DO
+
+    !! clean memory
+    IF (NM%ns .GT. 0) DEALLOCATE(AB)
+  
+    DEALLOCATE(bias)
+    DEALLOCATE(qxx)
+  
+    RETURN
+  
+  END SUBROUTINE
+  

@@ -1,0 +1,114 @@
+# 1 "/home/xfd/data/PPP/src/lib_modules/mod_info.f90"
+!*
+MODULE info
+!!
+USE const
+USE par
+IMPLICIT NONE
+
+!! Parameter definition
+  TYPE prmt
+! station and satellite ID      SIT SAT IFREQ
+    INTEGER(IT) :: pcode(3) = 0
+! the number of observations related to this parameter, 和参数有关的观测方程数
+    INTEGER(IT) :: iobs = 0
+! the name of parameter
+    CHARACTER(LEN_PARNAME) :: pname = ''
+! the active time span
+    REAL(RL) :: ptime(2) = 0.D0
+! a priori value
+    REAL(RL) :: xini = 0.D0
+! the corrected value
+    REAL(RL) :: xcor = 0.D0
+! the estimated value: estimated = priori+corrected
+    REAL(RL) :: xest = 0.D0
+! the sigma of value
+    REAL(RL) :: xsig = 0.D0
+! the process noise
+    REAL(RL) :: map = 0.D0
+    REAL(RL) :: rw = 0.D0
+    REAL(RL) :: zw = 0.D0
+!@CMT BY XSY: only used for fcb with IF combination
+    REAL(RL) :: zew = 0.D0
+    REAL(RL) :: rew = 0.D0  
+    REAL(RL) :: zeew = 0.d0
+    REAL(RL) :: reew = 0.d0
+    REAL(RL) :: zhew = 0.d0
+    REAL(RL) :: rhew = 0.d0      
+! the statistics for MW combination
+! The weight sum of MW fractional cycle part
+    REAL(RL) :: xswl = 0.D0
+    REAL(RL) :: xsewl = 0.D0
+    REAL(RL) :: xseewl = 0.d0
+    REAL(RL) :: xshewl = 0.d0
+! The sum of elevation
+    REAL(RL) :: elev = 0.D0
+! The value of MW combination
+    REAL(RL) :: abwl = 0.D0
+    REAL(RL) :: abewl = 0.D0
+    REAL(RL) :: abeewl = 0.d0
+    REAL(RL) :: abhewl = 0.d0
+! The sum of fractional cycle of MW combinations
+    REAL(RL) :: xrwl = 0.D0
+    REAL(RL) :: xrewl = 0.D0
+    REAL(RL) :: xreewl = 0.d0
+    REAL(RL) :: xrhewl = 0.d0
+! The sigma of MW combination
+    REAL(RL) :: sigw = 0.D0
+    REAL(RL) :: sigew = 0.D0
+    REAL(RL) :: sigeew = 0.d0
+    REAL(RL) :: sighew = 0.d0
+  END TYPE
+
+!! Information matrix
+  TYPE infm
+! Composition of parameters
+    INTEGER(IT) :: np = 0
+    INTEGER(IT) :: nc = 0
+    INTEGER(IT) :: ns = 0
+    INTEGER(IT) :: imtx = 0
+    INTEGER(IT) :: nmtx = 0
+    INTEGER(IT) :: npar = 0
+    INTEGER(IT) :: npc = 0
+    INTEGER(IT) :: namb = 0
+! Statistics of observations
+    INTEGER(IT) :: nobs = 0
+! Number of constrans' equation
+    INTEGER(IT) :: ncstr = 0
+! Pointer of all types of observations
+    INTEGER(IT) :: ipob(MAXSIT*MAXSAT,4)        !xsy: 指向观测值的指针，观测值对应的[卫星]、[测站]、[观测值类型]、[频率]
+! Sigma of current epoch
+    REAL(RL) :: esig
+! Sigma of the before epoch
+    REAL(RL) :: esig_before = 0.d0
+! Weight of each observation
+    REAL(RL) :: weig(MAXSIT*MAXSAT)
+! Residual of each observation
+    REAL(RL) :: resi(MAXSIT*MAXSAT)
+! Pointer of each column
+    INTEGER(IT), POINTER :: iptx(:)
+    REAL(RL), POINTER :: infs(:,:)
+    REAL(RL), POINTER :: co_infs(:,:)           !xsy: for IGG3,save the information matrix
+  END TYPE
+
+!! Inversed Normal(Q) Matrix                  !xsy:Qxx=(ATPA)-1,协因数阵
+  TYPE invm
+    INTEGER(IT) :: nsiz = 0
+! ntot : total number of parameters,            参数总数
+    INTEGER(IT) :: ntot = 0
+! nxyz : number of non-ambiguity parameters，   非模糊度参数个数
+    INTEGER(IT) :: nxyz = 0
+! nufamb : number of rest un-fixed ambiguities，剩下未固定的模糊度个数,不包括多余模糊度(abst=-1)
+    INTEGER(IT) :: ndam = 0
+! ncad : number of to-be-fixed ambiguities，    即将固定模糊度个数
+    INTEGER(IT) :: ncad = 0
+! nfamb : number of fixed ambiguities，         固定的模糊度个数
+    INTEGER(IT) :: nfix = 0
+    INTEGER(IT), POINTER :: idq(:)
+    REAL(RL), POINTER :: invx(:,:)
+
+    REAL(RL) :: adop = 0.d0
+    REAL(RL) :: esig = 0.d0
+  END TYPE
+
+END MODULE

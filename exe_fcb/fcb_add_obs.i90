@@ -1,0 +1,178 @@
+# 1 "/home/xfd/data/PPP/src/exe_fcb/fcb_add_obs.f90"
+!
+!! purpose   : add observation equations to estimator SRIF
+!! paraemters:
+!!             fjd    -- float julian day
+!!             BCF    -- SRIF control parameters
+!!             OB     -- Observation struct
+!!             PM,NM  -- normal matrix & PAR table
+!! author    : Geng J
+!! created   : Nov. 11, 2007
+!
+
+SUBROUTINE fcb_add_obs(isit,CKF,OB,SIT,SAT,PM,NM,infs)
+!!
+!*
+USE info
+USE ckdctrl
+USE station
+USE satellite
+USE observation
+USE ISO_FORTRAN_ENV
+IMPLICIT NONE
+
+!*
+! The arguments
+!!-----------------
+INTEGER(IT) :: isit
+TYPE(CKDCFG) :: CKF
+TYPE(SITE) :: SIT
+TYPE(RNXOBS) :: OB
+TYPE(SATE) :: SAT(MAXSAT)
+TYPE(PRMT) :: PM(1:*)
+TYPE(INFM) :: NM
+REAL(RL) :: infs(1:*)
+
+!*
+! The local variables
+!!---------------------
+  INTEGER(IT) :: i,j,k,isat,ipar,ipt
+  INTEGER(IT) :: isys,ifreq
+  CHARACTER(LEN=5) :: camb
+  CHARACTER(LEN=11) :: crfcb
+  REAL(RL) :: phase,range
+
+!*
+! Start the exectuable code
+!!----------------------------
+
+  k = COUNT(OB.omc(1:CKF.nprn,1) .NE. 0.D0)*2*MAXVAL(CKF.nfq)
+  IF (NM.imtx+k+1 .GT. NM.nmtx) THEN
+    WRITE(ERROR_UNIT,'(A,3I5)') '***ERROR(fcb_add_obs): S matrix too small ', NM.imtx, k, NM.nmtx
+    CALL exit(1)
+  END IF
+
+!! first phase, then range
+  DO isat=1, CKF.nprn
+
+    isys=INDEX(SYS,CKF.cprn(isat)(1:1))
+
+    DO ifreq=1, CKF.nfq(isys)
+
+      WRITE(camb,'(A4,I1)') 'AMBL',ifreq
+      WRITE(crfcb,'(A7,I1,A3)') 'RECDCBL',ifreq,CKF.cprn(isat)
+
+      IF (OB.omc(isat,ifreq).EQ.0.d0 .OR. OB.omc(isat,MAXFREQ+ifreq).EQ.0.d0) CYCLE
+
+      range=0.d0
+      phase=0.d0
+
+!! right side & observation index
+      NM.nobs=NM.nobs+1
+      IF (CKF.cobs(1:2) .EQ. 'IF') THEN
+        phase= SAT(isat).fac(1)*OB.omc(isat,1)-SAT(isat).fac(2)*OB.omc(isat,2)
+        NM.weig(NM.nobs)=1.d0/DSQRT(SAT(isat).fac(1)**2*OB.var(isat,1)+SAT(isat).fac(2)**2*OB.var(isat,2))
+      ELSE IF (CKF.cobs(1:3) .EQ. 'RAW') THEN
+        phase=OB.omc(isat,ifreq)
+        NM.weig(NM.nobs)=1.d0/DSQRT(OB.var(isat,ifreq))
+      ELSE IF (CKF.cobs(1:7) .EQ. 'GRAPHIC') THEN
+        phase=(OB.omc(isat,ifreq)+OB.omc(isat,MAXFREQ+ifreq))/2.d0
+        NM.weig(NM.nobs)=2.d0/DSQRT(OB.var(isat,ifreq)+OB.var(isat,MAXFREQ+ifreq))
+      END IF
+      NM.ipob(NM.nobs,1)=isit
+      NM.ipob(NM.nobs,2)=isat
+      NM.ipob(NM.nobs,3)=1    ! phase
+      NM.ipob(NM.nobs,4)=ifreq
+
+      NM.nobs=NM.nobs+1
+      IF (CKF.cobs(1:2) .EQ. 'IF') THEN
+        range= SAT(isat).fac(1)*OB.omc(isat,MAXFREQ+1)-SAT(isat).fac(2)*OB.omc(isat,MAXFREQ+2)
+        NM.weig(NM.nobs)=1.d0/DSQRT(SAT(isat).fac(1)**2*OB.var(isat,MAXFREQ+1)+SAT(isat).fac(2)**2*OB.var(isat,MAXFREQ+2))
+      ELSE IF (CKF.cobs(1:3) .EQ. 'RAW') THEN
+        range=OB.omc(isat,MAXFREQ+ifreq)
+        NM.weig(NM.nobs)=1.d0/DSQRT(OB.var(isat,MAXFREQ+ifreq))
+        IF (.NOT.CKF%lrecdcb) THEN
+          IF (ifreq.GE.3) NM.weig(NM.nobs)=1.D-12
+        END IF        
+      ELSE IF (CKF.cobs(1:7) .EQ. 'GRAPHIC') THEN
+!NM.nobs=NM.nobs-1
+!range=0.d0
+        range=OB.omc(isat,MAXFREQ+ifreq)
+        NM.weig(NM.nobs)=1.d0/DSQRT(OB.var(isat,MAXFREQ+ifreq))
+      END IF
+      NM.ipob(NM.nobs,1)=isit
+      NM.ipob(NM.nobs,2)=isat
+      NM.ipob(NM.nobs,3)=2    ! range
+      NM.ipob(NM.nobs,4)=ifreq
+
+!! clean
+      DO j=1,NM.imtx+1
+        infs(NM.iptx(j)+NM.imtx+NM.nobs-1)=0.d0
+        infs(NM.iptx(j)+NM.imtx+NM.nobs  )=0.d0
+      END DO
+
+!! obs. equations
+      DO ipar=1,OB.npar
+
+        IF (OB.ltog(ipar,isat) .EQ. 0) CYCLE
+
+        IF (OB.pname(ipar)(1:7) .EQ. 'RECDCBL') THEN
+          IF (OB.pname(ipar)(1:11) .NE. crfcb) CYCLE
+        END IF
+
+        ipt=OB.ltog(ipar,isat)
+
+!! The first is receiver clock and the other is ISB
+!IF (OB.pname(ipar)(1:6).EQ.'RECCLK' .AND. OB.pname(ipar)(7:7).NE.CKF.cprn(isat)(1:1)) CYCLE
+        IF (OB.pname(ipar)(1:6) .EQ. 'RECCLK') THEN
+          IF (OB.pname(ipar)(7:7).NE.SYS(CKF.iref:CKF.iref) .AND. OB.pname(ipar)(7:7).NE.CKF.cprn(isat)(1:1)) CYCLE
+        END IF
+
+!! initial value for the new ambiguity parameters
+        IF (OB.pname(ipar)(1:5) .EQ. TRIM(camb)) THEN
+          IF (OB.flag(isat,ifreq) .NE. 0) THEN
+            PM(ipt).xini=phase-range
+!@ CMT BY XSY: BE CARE OF THIS
+! for raw, we set it as zero to deal with the multi-frequency ambiguities
+            IF (CKF%cobs(1:3) .EQ. 'RAW') THEN
+              PM(ipt).xini=0.d0
+            END IF
+          END IF
+          phase=phase-OB.amat(ipar,isat)*PM(ipt).xini
+          PM(ipt).iobs=PM(ipt).iobs+1
+        ELSE IF (OB.pname(ipar)(1:3) .EQ. 'AMB') THEN
+          CYCLE
+        ELSE ! crfcb only for code
+          PM(ipt).iobs=PM(ipt).iobs+2
+        END IF
+
+        IF (OB.pname(ipar)(1:6) .EQ. 'ION'//CKF.cprn(isat)) THEN
+          OB.amat(ipar,isat)=(SAT(isat).freq(1)/SAT(isat).freq(ifreq))**2
+        END IF
+!write(*,*) phase,range,CKF.cprn(isat),OB.pname(ipar),OB.amat(ipar,isat)
+
+!! add observation
+! crfcb only for code observation, others is suitable for phase
+        IF (OB.pname(ipar)(1:11) .NE. crfcb) THEN
+          infs(NM.iptx(ipt)+NM.imtx+NM.nobs-1)=OB.amat(ipar,isat)*NM.weig(NM.nobs-1)
+        END IF
+        IF (OB.pname(ipar)(1:6) .EQ. 'ION'//CKF.cprn(isat)) THEN
+          infs(NM.iptx(ipt)+NM.imtx+NM.nobs-1)=-OB.amat(ipar,isat)*NM.weig(NM.nobs-1)
+        END IF
+! camb only for phase observation, others is suitable for code
+        IF (OB.pname(ipar)(1:5) .NE. camb) THEN
+          infs(NM.iptx(ipt)+NM.imtx+NM.nobs)=OB.amat(ipar,isat)*NM.weig(NM.nobs)
+        END IF
+      END DO
+
+      infs(NM.iptx(NM.imtx+1)+NM.imtx+NM.nobs-1)=phase*NM.weig(NM.nobs-1)
+      infs(NM.iptx(NM.imtx+1)+NM.imtx+NM.nobs)  =range*NM.weig(NM.nobs)
+
+    END DO
+
+!! next observations
+  END DO
+
+  RETURN
+
+END SUBROUTINE

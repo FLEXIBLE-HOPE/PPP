@@ -1,0 +1,8 @@
+     2              NAVIGATION DATA                         RINEX VERSION / TYPE
+ED4WIN              Ola Ovstedal        20-NOV-00 11:00     PGM / RUN BY / DATE
+Test data for GPS-TOLLBOX                                   COMMENT
+    0.7451D-08  0.2235D-07 -0.5960D-07 -0.1192D-06          ION ALPHA           
+    0.8602D+05  0.8192D+05 -0.1311D+06 -0.5243D+06          ION BETA            
+                                                            END OF HEADER
+     .3820D-07   .1490D-07  -.1790D-06   .0000D-00          ION ALPHA           
+     .1430D+06   .0000D+00  -.3280D+06   .1130D+06          ION BETA            

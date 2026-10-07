@@ -1,0 +1,152 @@
+!*
+SUBROUTINE klobuchar(csys,lat,lon,elev,azim,tow,alfa,beta,dion1)
+!!
+!! Subroutine for computing an Ionospheric range correction for the *
+!! GPS L1 frequency from the parameters broadcasted in the GPS      *
+!! Navigation Message.                                              *
+!! ==================================================================
+!! References:                                                      *
+!! Klobuchar, J.A., (1996) "Ionosphercic Effects on GPS", in        *
+!!   Parkinson, Spilker (ed), "Global Positioning System Theory and *
+!!   Applications, pp.513-514.                                      *
+!! ICD-GPS-200, Rev. C, (1997), pp. 125-128                         *
+!! NATO, (1991), "Technical Characteristics of the NAVSTAR GPS",    *
+!!   pp. A-6-31   -   A-6-33                                        *
+!! ==================================================================
+!! Author : Ola Ovstedal, Department of Mapping Sciences            *
+!!                        Agricultural University of Norway         *
+!! Date   : 06.03.2000                  Last modified : 20.11.2000  *
+!! ==================================================================
+!! Input :                                                          *
+!!   lat           : Geodetic latitude of receiver          (rad)   *
+!!   lon           : Geodetic longitude of receiver         (rad)   *
+!!   elev          : Elevation angle of satellite           (rad)   *
+!!   azim          : Geodetic azimuth of satellite          (rad)   *
+!!   tow           : Time of Week                           (sec)   *
+!!   alfa(4)       : The coefficients of a cubic equation           *
+!!                   representing the amplitude of the vertical     *
+!!                   dalay (4 coefficients - 8 bits each)           *
+!!   beta(4)       : The coefficients of a cubic equation           *
+!!                   representing the period of the model           *
+!!                   (4 coefficients - 8 bits each)                 *
+!! Output:                                                          *
+!!   dion1         : Ionospheric slant range correction for         *
+!!                   the GPS L1 frequency                   (metre) *
+!! ==================================================================
+!! Changes:                                                         *
+!! 20.11.2000 : Different constants assigned in subroutine so that  *
+!!              the subroutine is self-contained (for GPS-TOOLBOX)  *
+!! ==================================================================
+!!
+!*
+USE const
+USE ISO_FORTRAN_ENV
+IMPLICIT NONE
+
+!*
+! The arguments
+!!----------------------
+REAL(RL) :: lat,lon,elev,azim,tow
+REAL(RL) :: alfa(4),beta(4),dion1
+CHARACTER :: csys
+
+  !*
+  ! The variables
+  !!-----------------------
+  REAL(RL) :: lat_i,long_i,lat_m
+  REAL(RL) :: t,sf,per,x,amp,psi
+
+  !*
+  ! Start the exectuable code
+  !!----------------------------
+
+  SELECT CASE(TRIM(csys))
+    CASE('C')
+      ! The Earth-centred angle between the user position and the earth projection of ionosphere intersection point
+      psi=PI/2.d0-elev-DASIN(6378.d0/(6378.d0+375.d0)*DCOS(elev))
+
+      ! Magnetic latitude of IPP (average ionospheric altitude of 350 km is assumed)
+      lat_m=DASIN(DSIN(lat)*DCOS(psi)+DCOS(lat)*DSIN(psi)*DCOS(azim))
+
+      ! Longitude of the IPP
+      long_i=lon+DASIN(DSIN(psi)*DSIN(azim)/DCOS(lat_m))
+
+      ! Local time in BDST, but the input is GPST
+      t=43200.d0*long_i/PI+tow+14.d0
+      ! Second of day
+      t=DMOD(t,86400.D0)
+      IF (t .GT. 86400.D0)  t=t-86400.D0
+      IF (t .LT. 0.D0)      t=t+86400.D0
+
+      ! Amplitude
+      amp=alfa(1)+alfa(2)*lat_m+alfa(3)*lat_m**2+alfa(4)*lat_m**3
+      IF (amp .LT. 0.D0) amp=0.D0
+
+      ! The period of ionospheric delay
+      per=beta(1)+beta(2)*lat_m+beta(3)*lat_m**2+beta(4)*lat_m**3
+      IF (per .LT. 72000.D0) per=72000.d0
+      IF (per .GE. 172800.D0) per=172800.d0
+
+      ! The phase of ionospheric delay
+      x=2.D0*pi*(t-50400.D0)/per
+
+      ! The slant factor (ionosphere mapping function)
+      sf=1.d0/DSQRT(1.d0-(6378.d0/(6378.d0+375.d0)*DCOS(elev))**2)
+
+      ! L1 Ionospheric corr.
+      IF (DABS(t-50400.d0) .GE. per/4.d0) THEN
+        dion1=sf*(5.D-9)
+      ELSE
+        dion1=sf*(5.D-9+amp*DCOS(x))
+      END IF
+
+    CASE DEFAULT
+      ! The Earth-centred angle between the user position and the earth projection of ionosphere intersection point
+      psi=0.0137/(elev+0.11)-0.022
+
+      ! Latitude of the earth projection of IPP
+      lat_i=lat+psi*DCOS(azim)
+      IF (lat_i >  0.416d0) lat_i= 0.416
+      IF (lat_i < -0.416d0) lat_i=-0.416
+
+      ! Longitude of the IPP
+      long_i=lon+(psi*DSIN(azim)/DCOS(lat_i))
+
+      ! Magnetic latitude of IPP (average ionospheric altitude of 350 km is assumed)
+      lat_m=lat_i+0.064*DCOS(long_i-1.617)
+
+      ! Local time
+      t=43200.d0*long_i/PI+tow
+      ! Second of day
+      t=DMOD(t,86400.D0)
+      IF (t .GT. 86400.D0)  t=t-86400.D0
+      IF (t .LT. 0.D0)      t=t+86400.D0
+
+      ! Amplitude
+      amp=alfa(1)+alfa(2)*lat_m+alfa(3)*lat_m**2+alfa(4)*lat_m**3
+      IF (amp .LT. 0.D0) amp=0.D0
+
+      ! The period of ionospheric delay
+      per=beta(1)+beta(2)*lat_m+beta(3)*lat_m**2+beta(4)*lat_m**3
+      IF (per .LT. 72000.D0) per=72000.d0
+
+      ! The phase of ionospheric delay
+      x=2.D0*pi*(t-50400.D0)/per
+
+      ! The slant factor (ionosphere mapping function)
+      sf=1.d0+16.d0*(0.53d0-elev)**3
+
+      ! L1 Ionospheric corr.
+      IF (DABS(x) .GE. PI/2.d0) THEN
+        dion1=sf*(5.D-9)
+      ELSE
+        dion1=sf*(5.D-9+amp*(1-x**2/2.d0+x**4/24.d0))
+      END IF
+  END SELECT
+
+  dion1=VEL_LIGHT*dion1
+
+
+  RETURN
+
+END SUBROUTINE

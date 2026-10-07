@@ -1,0 +1,278 @@
+# 1 "/home/xfd/data/PPP/src/lib_modules/mod_ckdctrl.f90"
+!*
+MODULE ckdctrl
+!*
+USE const
+USE ISO_FORTRAN_ENV
+IMPLICIT NONE
+
+  TYPE ckdcfg
+! socket number and port
+    INTEGER(IT) :: sock = 0
+    CHARACTER(LEN_PORT) :: port = ''
+    LOGICAL(LG) :: ldebug = .FALSE.
+    LOGICAL(LG) :: lpost = .FALSE.
+    LOGICAL(LG) :: lerp = .FALSE.
+    LOGICAL(LG) :: llog = .FALSE.
+! lsq orbit determination
+    LOGICAL(LG) :: lpod = .FALSE.
+! lsq fixing ambiguity
+    LOGICAL(LG) :: lamb = .FALSE.
+! using inter-satellite link data
+    LOGICAL(LG) :: lisl = .FALSE.
+! bd2 and bd3 in same
+    LOGICAL(LG) :: lbd23 = .FALSE.
+! estimate receiver clock(FALSE) or ISB(TRUE)
+    LOGICAL(LG) :: lisb = .TRUE.
+! estimate the RECDCB for the third frequency code observations(FALSE)
+    LOGICAL(LG) :: lrecdcb = .FALSE.    
+! estimate LEO time synchronization bias (FALSE) or IFB(TRUE)
+    LOGICAL(LG) :: lleoifb = .TRUE.
+
+! Observation used
+    CHARACTER(LEN=20) :: uobs = 'CODE PHASE'
+    CHARACTER(LEN=20) :: cobs = 'IF'
+    CHARACTER(LEN=20) :: dobs = 'UD'
+    INTEGER(IT) :: nfq(MAXSYS) = 0
+
+! The GNSS system
+    INTEGER(IT) :: iref = 0
+    INTEGER(IT) :: nsys = 0
+    CHARACTER(MAXSYS) :: system = ''
+    INTEGER(IT) :: nfreq(MAXSYS) = 0                      !每个系统频率数,支持混频
+    CHARACTER(LEN_FREQ) :: freq(MAXFREQ,MAXSYS) = ''
+    
+    INTEGER(IT) :: refnprn(MAXSYS) = 0                    !各系统参考星
+    CHARACTER(LEN_PRN) :: refcprn(MAXSYS) = ''
+    INTEGER(IT) :: refsat = 0                             !不分系统时的参考星
+    CHARACTER(LEN_PRN) :: refprn = ''
+
+!xsy-2024-05-14: reference satellite and station for sdb program
+    INTEGER(IT) :: ind_rsat = 0
+    INTEGER(IT) :: ind_rsit = 0
+    CHARACTER(LEN_PRN) :: rsat = ''
+    CHARACTER(LEN_SITENAME) :: rsit = ''
+
+    CHARACTER(LEN=10) :: ArBiasMode = ''
+!xsy: DCB mode: osb or cc2nocc
+    CHARACTER(LEN=10) :: codebias = ''    
+!xsy: OSB mode
+    CHARACTER(LEN=10) :: osbMode = ''
+!xsy: OBS channel in code and phase  for OSB file, 16 is same as OBSTYPE
+!或许需要放在SAT里
+!  2: C/L
+! 10: 频率数量
+! 16: 通道数量
+!REAL(RL) :: osbChannel(2,MAXSYS,MAXSAT,10,16) = 0.d0
+
+! Time of epoch
+    INTEGER(IT) :: mjd = 0
+    INTEGER(IT) :: totepc = 0
+    REAL(RL) :: sod = 0.D0
+    REAL(RL) :: dintv = 0.D0
+
+! the begining and end time
+    INTEGER(IT) :: mjd0 = 0
+    INTEGER(IT) :: mjd1 = 0
+    REAL(RL) :: sod0 = 0.d0
+    REAL(RL) :: sod1 = 0.d0
+
+! stations and satellites
+    INTEGER(IT) :: nsit = 0
+    INTEGER(IT) :: nprn = 0
+    INTEGER(IT) :: nleo = 0
+    CHARACTER(LEN_PRN) :: cprn(MAXSAT) = ''
+
+! carrier-phase smooth the code
+! NONE/NO
+! PHASE
+! DOPPLER
+    CHARACTER(LEN_ZTDMOD) :: pscmod = ''
+    INTEGER(IT) :: pscwnd = 0
+! troposphere dealy estimation approach
+! epoch wise or piece-wise constant
+    CHARACTER(LEN_ZTDMOD) :: ztdmod = ''
+! troposphere gradient dealy estimation approach
+! epoch wise (EW) or piece-wise constant (PWC)
+    CHARACTER(LEN_ZTDMOD) :: grdmod = ''
+! ionosphere delay estimation approach
+! option:
+! 1) SID: slant ionosphere delay, EW/PWC
+! 2) ZTD: zenith ionosphere delay, EW/PWC
+! 3) KLO: correction by klobuchar model
+! 4) NEQ: correction by NeQuick model
+! 5) GIM: correction by GIM model
+    CHARACTER(LEN_IONMOD) :: ionmod = ''
+!xsy: PPPRTK
+    REAL(RL) :: ionConstrians = 10.d0
+    REAL(RL) :: ztdConstrians = 10.d0
+!xsy: SIT constrians
+    LOGICAL(LG) :: lsitcons = .FALSE.
+    REAL(RL) :: sitConstrians(3) = 10.d0
+!xsy 2024-04-17: set the lockout span
+    REAL(RL) :: lockout(2) = 0.d0
+
+! data pre-processing
+    INTEGER(IT) :: gap = 0
+    REAL(RL) :: lg = 0.D0
+    REAL(RL) :: lw = 0.D0
+    LOGICAL(LG) :: lli_flag = .FALSE.
+
+! Gravity field modeling
+    LOGICAL(IT) :: lgfm = .FALSE.
+    INTEGER(IT) :: mindeg = 0
+    INTEGER(IT) :: maxdeg = 0
+    INTEGER(IT) :: ngc = 0
+    INTEGER(IT) :: ltog(0:MAXGRADEG,0:MAXGRADEG,2) = 0
+
+!!xsy: NLOS factor
+    LOGICAL(LG) :: nlos = .TRUE. !true:直接删除nlos观测值
+    INTEGER(IT) :: nlosfac = 1
+!!xsy: SNR detele
+    INTEGER(IT) :: SnrLimit = 32
+!!xsy: IGG3 decision
+    LOGICAL(LG) :: Igg3 = .TRUE. 
+    REAL(RL) :: Igg3_k0 = 0.d0
+    REAL(RL) :: Igg3_k1 = 0.d0
+!!xsy: repair cycle slip or not
+    LOGICAL(LG) :: repslip = .FALSE.
+!!xsy: DIA detection thershold
+    REAL(RL) :: DiaSig = 0.d0
+!!xsy: Reconvergence time
+    INTEGER(IT) :: ReConvTime = 0
+!!xsy: AR mode
+    CHARACTER(LEN=20) :: ArMode = ''
+!!xsy: Whether map FCB to OSB
+    LOGICAL(LG) :: FcbMapToOsb = .FALSE.
+
+    CHARACTER(LEN_STRING) :: freq_used = ''
+    CHARACTER(LEN_STRING) :: signal_used = ''
+   
+! Files
+    CHARACTER(LEN_FILENAME) :: flnorb = ''
+    CHARACTER(LEN_FILENAME) :: flnleo = ''
+    CHARACTER(LEN_FILENAME) :: flnerp = ''
+    CHARACTER(LEN_FILENAME) :: flnrck = ''
+    CHARACTER(LEN_FILENAME) :: flnztd = ''
+    CHARACTER(LEN_FILENAME) :: flndop = ''
+    CHARACTER(LEN_FILENAME) :: flnres = ''
+    CHARACTER(LEN_FILENAME) :: flncck = ''
+    CHARACTER(LEN_FILENAME) :: flnamb = ''
+    CHARACTER(LEN_FILENAME) :: flnsnx = ''
+    CHARACTER(LEN_FILENAME) :: flnfnl = ''
+    CHARACTER(LEN_FILENAME) :: flnfwl = ''
+    CHARACTER(LEN_FILENAME) :: flnfewl = ''
+    CHARACTER(LEN_FILENAME) :: flnfeewl = ''
+    CHARACTER(LEN_FILENAME) :: flnfhewl = ''
+    CHARACTER(LEN_FILENAME) :: flnpos = ''
+    CHARACTER(LEN_FILENAME) :: flnkin = ''
+    CHARACTER(LEN_FILENAME) :: flnslr = ''
+    CHARACTER(LEN_FILENAME) :: flnisl = ''
+    CHARACTER(LEN_FILENAME) :: flnion = ''
+    CHARACTER(LEN_FILENAME) :: flnbrd = ''
+    CHARACTER(LEN_FILENAME) :: flnifcb = ''
+    CHARACTER(LEN_FILENAME) :: flnmw = ''
+! For lsq
+    CHARACTER(LEN_FILENAME) :: flnpar = ''
+    CHARACTER(LEN_FILENAME) :: flnnom = ''
+!!xsy-22-9-17:osb
+    CHARACTER(LEN_FILENAME) :: flnosb = ''
+    CHARACTER(LEN_FILENAME) :: flnosbcode = ''  !CodeOsb file for FCB as input file
+    CHARACTER(LEN_FILENAME) :: flnosbupd = ''   !OSB file for FCB by my own FCB, Phase OSB and Code osb
+    CHARACTER(LEN_FILENAME) :: flnpco = ''
+    CHARACTER(LEN_FILENAME) :: flnrbias = ''    !FPA bias file between different receiver types, including NL/WL/EWL/EEWL/HEWL
+    CHARACTER(LEN_FILENAME) :: flnsdb = '' 
+    CHARACTER(LEN_FILENAME) :: flnomc = ''
+    CHARACTER(LEN_FILENAME) :: flngfif = ''
+    CHARACTER(LEN_FILENAME) :: flndcb = ''
+    CHARACTER(LEN_FILENAME) :: flngf = ''   
+
+! Temporal files for smooth
+    INTEGER(IT) :: lfnobs = ERROR_UNIT
+    INTEGER(IT) :: lfncid = ERROR_UNIT
+    INTEGER(IT) :: lfnrem = ERROR_UNIT
+
+
+! The options for GLONASS ISB
+    LOGICAL(LG) :: lrisb = .FALSE.
+    INTEGER(IT) :: imw = -1
+! The configration options for ambiguity
+! Integer Ambiguity resolution or not
+    LOGICAL(LG) :: liar = .TRUE.
+! The minmam common period for satellite paries in second
+    REAL(RL) :: minsec_common = 1200.D0
+! IF固定MW，是否修改PCO
+    LOGICAL(LG) :: if_pco_corr = .FALSE.
+! The decision parameters for wide-lane ambiguity resolution in cycle
+    REAL(RL) :: wl_maxdev = 0.1D0
+    REAL(RL) :: wl_maxsig = 0.1D0
+    REAL(RL) :: wl_alpha = 1.D3
+    REAL(RL) :: wl_dintv = 30.d0
+! The decision parameters for narrow-lane ambiguity resolution in cycle
+! For ambfix
+    REAL(RL) :: nl_maxdev = 0.1D0
+    REAL(RL) :: nl_maxsig = 0.1D0
+    REAL(RL) :: nl_alpha = 1.D3
+    REAL(RL) :: bl_limit = 5000.d0
+! The cut-off angle of NL ambiguities
+    REAL(RL) :: cutoff = 10.d0
+! The cut-off angle of WL ambiguities
+    REAL(RL) :: wlcutoff = 10.d0
+! The length for updating Melbourne-Wubbean ambiguity
+    REAL(RL) :: updwl = 86400.D0
+! Maximum number of excluded ambiguities
+    INTEGER(IT) :: nl_maxdel = 0
+! Minimum number of reserved ambiguities
+    REAL(RL) :: nl_minsav = 0
+! Threshold values for chi- and ratio tests
+    REAL(RL) :: nl_ratio = 0
+!xsy: Threshold values for chi- and ratio tests for WL
+    REAL(RL) :: wl_ratio = 0
+!xsy: 不参与固定的卫星
+    CHARACTER(LEN_STRING) :: nofixsat = ''
+!xsy-2024-03-30: the minmum common stations for fcb
+    INTEGER(IT) :: commonsit = 5
+
+!xsy-2024-10-22: the MW minimu arc length for sdb program
+    REAL(RL) :: mwarc_gnss2leo = 600.D0
+    REAL(RL) :: mwarc_gnss2sit = 600.D0
+    REAL(RL) :: mwarc_leo2sit  = 600.D0
+!xsy-2024-12-04: the input MW SDB as init
+    CHARACTER(LEN_FILENAME) :: flnmw_init = ''   
+
+  END TYPE
+
+  TYPE EOPMOD
+    CHARACTER(LEN_STRING):: model
+    REAL(RL) :: x(6) = 0.d0
+    REAL(RL) :: dx0(3) = 0.d0
+    REAL(RL) :: q(3) = 0.d0
+  END TYPE EOPMOD
+
+!! solution report
+  TYPE SOL
+    INTEGER(IT) :: ncad = 0         !xsy: 即将固定的窄巷数量
+    INTEGER(IT) :: nfix = 0         !xsy: 固定的窄巷数量
+    REAL(RL) :: refx(3) = 0.D0      !xsy: 参考坐标，来自gnss.sit
+    REAL(RL) :: ratio = 0.D0        !xsy：可靠性检验
+    REAL(RL) :: adop = 0.D0
+    REAL(RL) :: fpos(3) = 0.D0      !xsy：浮点解
+    REAL(RL) :: xpos(3) = 0.D0      !xsy: 固定解
+    REAL(RL) :: rot(3,3) = 0.D0     !xsy: rot_l2f(enu2xyz)
+
+    INTEGER(IT) :: fix_ewl = 0      !xsy: 是否成功固定，0：NO   1：YES
+    INTEGER(IT) :: fixnum_ewl = 0
+    INTEGER(IT) :: fix_wl = 0       !xsy: 是否成功固定，0：NO   1：YES
+    INTEGER(IT) :: fixnum_wl = 0
+    INTEGER(IT) :: fix_nl = 0       !xsy: 是否成功固定，0：NO   1：YES
+    INTEGER(IT) :: fixnum_nl = 0
+  END TYPE
+
+!! receiver information
+  TYPE RECINFO
+      CHARACTER(LEN_STRING) :: rectype = ''
+      CHARACTER(LEN_STRING) :: recvers = ''
+      CHARACTER(LEN_STRING) :: anttype = ''
+  END TYPE
+
+END MODULE

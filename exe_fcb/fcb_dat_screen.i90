@@ -1,0 +1,199 @@
+# 1 "/home/xfd/data/PPP/src/exe_fcb/fcb_dat_screen.f90"
+!
+!! purpose  : detection for biases and blunders
+!! parameter:
+!!    input : OB     -- observation
+!!            NM,AM  -- information matrix & ambiguity parameters
+!!            infs   -- one-dimensional array for information matrix
+!!    output:
+!! author   : Geng J
+!! created  : Nov. 24, 2007
+!
+SUBROUTINE fcb_dat_screen(CKF,SIT,OB,PM,NM,infs)
+!!
+!*
+USE info
+USE ckdctrl
+USE station
+USE observation
+USE ISO_FORTRAN_ENV
+IMPLICIT NONE
+
+!*
+! The arguments
+!!------------------------
+TYPE(RNXOBS) :: OB
+TYPE(SITE) :: SIT
+TYPE(INFM) :: NM
+TYPE(PRMT) :: PM(1:*)
+TYPE(CKDCFG) :: CKF
+REAL(RL) :: infs(1:*)
+
+!*
+! The local variables
+!!-------------------------
+  INTEGER(IT) :: i,j,isit,isat,nb,iamb,ifreq
+  INTEGER(IT) :: iset(MAXFREQ*MAXSAT),itg(MAXFREQ*MAXSAT),nbias,ibias(MAXFREQ*MAXSAT)
+  REAL(RL) :: esig,xcor(MAXFREQ*MAXSAT),xest(MAXFREQ*MAXSAT),dump
+
+!*
+! The function called
+!!-------------------------
+  INTEGER(IT) :: pointer_string
+
+!*
+! Start the exectuable code
+!!--------------------------
+
+!! whether cycle slips exist
+  nb=-1   ! flag for no slips
+  iset=0    ! corresponds to each obs
+  itg=0    ! pointer from sen-vectors to obs
+  esig=NM.esig
+  IF (NM.esig .GT. CKF.DiaSig) THEN
+
+!! step 1: compute sensitivity vectors
+    j=0
+    DO i=1,NM.nobs
+      IF (NM.ipob(i,3) .EQ. 1) THEN ! only for phase
+        j=j+1
+        itg(j)=i
+        CALL fcb_scr_senvec(i,NM.weig(i),infs(NM.iptx(NM.imtx+1+j)+1),NM,infs)
+      END IF
+    END DO
+
+!! step 2: decide contaminated carrier phase
+! CALL fcb_scr_identify(1.d0,j,iset,NM,infs)
+! nb=COUNT(iset(1:NM.nobs/2) .NE. 0)
+    IF (CKF.DiaSig .LT. 0.3d0) THEN
+      CALL fcb_scr_identify(CKF.DiaSig,j,iset,NM,infs)
+    ELSE
+      CALL fcb_scr_identify(0.3d0,j,iset,NM,infs)
+    END IF
+    nb=COUNT(iset(1:NM.nobs/2) .NE. 0)
+
+    IF (nb .EQ. 0) THEN
+      IF (CKF.DiaSig .GT. 0.3d0) THEN
+        IF (CKF.DiaSig .LT. 0.5d0) THEN
+          CALL fcb_scr_identify(CKF.DiaSig,j,iset,NM,infs)
+        ELSE
+          CALL fcb_scr_identify(0.5d0,j,iset,NM,infs)
+        END IF
+        nb=COUNT(iset(1:NM.nobs/2) .NE. 0)
+
+        IF (nb .EQ. 0) THEN
+          IF (CKF.DiaSig .GT. 0.5d0) THEN
+            IF (CKF.DiaSig .LT. 1.0d0) THEN
+              CALL fcb_scr_identify(CKF.DiaSig,j,iset,NM,infs)
+            ELSE
+              CALL fcb_scr_identify(1.0d0,j,iset,NM,infs)
+            END IF
+            nb=COUNT(iset(1:NM.nobs/2) .NE. 0)
+          END IF
+        END IF
+      END IF
+    END IF
+
+!! step 3: adapt information system
+! nb=COUNT(iset(1:NM.nobs/2) .NE. 0)
+    IF (NM.imtx+1+NM.nobs+nb .GT. NM.nmtx) THEN
+      WRITE(ERROR_UNIT,'(A)') '***ERROR(fcb_dat_screen): S matrix too small'
+      CALL exit(1)
+    END IF
+    CALL fcb_scr_adapt(iset,NM,infs)
+  END IF
+
+!! clean lower part of NM.infs storing u vectors
+  DO j=1,NM.imtx
+    DO i=j+1,NM.imtx+NM.nobs+2
+      infs(NM.iptx(j)+i)=0.d0
+    END DO
+  END DO
+  IF (nb .EQ. -1) RETURN
+
+!! adaptation of information matrix & ambiguity list
+  IF (nb .GT. 0) THEN
+    WRITE(OUTPUT_UNIT,'(2A,2X,I7,F9.2,2F7.1)') 'DEC CYCLE-SLIP ',SIT.name,CKF.mjd,CKF.sod,esig,NM.esig
+!! set new ambiguity parameters
+    DO i=1,nb
+      isit=NM.ipob(itg(iset(i)),1)
+      isat=NM.ipob(itg(iset(i)),2)
+      ifreq=NM.ipob(itg(iset(i)),4)
+      WRITE(PM(NM.imtx+i).pname,'(A4,I1)') 'AMBL',ifreq
+      iamb=pointer_string(OB.npar,OB.pname,TRIM(PM(NM.imtx+i).pname))
+      PM(NM.imtx+i).iobs=-OB.ltog(iamb,isat)
+      PM(NM.imtx+i).pcode(1)=isit
+      PM(NM.imtx+i).pcode(2)=isat
+      PM(NM.imtx+i).xini=0.d0
+      PM(NM.imtx+i).ptime=CKF.mjd+CKF.sod/86400.d0
+      PM(NM.imtx+i).xrwl=0.d0
+      PM(NM.imtx+i).xrewl=0.d0
+      PM(NM.imtx+i).xswl=0.d0
+      PM(NM.imtx+i).xsewl=0.d0
+      PM(NM.imtx+i).elev=0.d0
+      PM(NM.imtx+i).abwl=0.d0
+      PM(NM.imtx+i).abewl=0.d0
+      PM(NM.imtx+i).sigw=0.d0
+      PM(NM.imtx+i).sigew=0.d0
+      PM(NM.imtx+i).rw=0.d0
+      PM(NM.imtx+i).rew=0.d0
+      PM(NM.imtx+i).zw=0.d0
+      PM(NM.imtx+i).zew=0.d0
+      PM(NM.imtx+i).map=0.d0
+      OB.flag(isat,ifreq)=1
+      OB.ltog(iamb,isat)=NM.imtx+i
+      WRITE(OUTPUT_UNIT,'(A,A3,A3,I3)') '----SAT ',CKF.cprn(isat),'#',ifreq
+    END DO
+!! ambiguity list
+    NM.ns  =NM.ns+nb
+    NM.imtx=NM.imtx+nb
+  ELSE
+    WRITE(OUTPUT_UNIT,'(2A,2X,I7,F9.2,F14.1)') 'UNK CYCLE-SLIP ',SIT.name,CKF.mjd,CKF.sod,NM.esig
+  END IF
+
+!! estimate new ambiguities & remove out-of-date ambiguities
+  IF (nb .GT. 0) THEN
+    xcor=0.d0
+    xest=0.d0
+    DO i=NM.imtx,NM.np+1,-1
+      dump=infs(NM.iptx(NM.imtx+1)+i)
+      DO j=i+1,NM.imtx
+        dump=dump-infs(NM.iptx(j)+i)*xcor(j)
+      END DO
+      xcor(i)=dump/infs(NM.iptx(i)+i)
+      xest(i)=xcor(i)+PM(i).xini
+    END DO
+
+!! set initial value for new ambiguities
+    DO i=1,NM.ns
+      IF (PM(NM.np+i).iobs .LT. 0) THEN
+        PM(NM.np+ i).xini=xest(-PM(NM.np+i).iobs)
+        PM(NM.np+ i).iobs=1
+      END IF
+    END DO
+
+!! remove original ambiguities that came across slips
+    nbias=0
+    DO i=1, NM.ns
+      isat=PM(NM.np+i).pcode(2)
+      iamb=pointer_string(OB.npar,OB.pname,TRIM(PM(NM.np+i).pname))
+      IF (OB.ltog(iamb,isat) .NE. NM.np+i) THEN
+        nbias=nbias+1
+        ibias(nbias)=NM.np+i
+      END IF
+    END DO
+    IF (nbias .GT. 0) THEN
+      CALL fcb_del_ambi(nbias,ibias,CKF,SIT,PM,NM,infs)
+!! adjust remaining pointers to information matrix
+      DO i=1, NM.ns
+        iamb=pointer_string(OB.npar,OB.pname,TRIM(PM(NM.np+i).pname))
+        OB.ltog(iamb,PM(NM.np+i).pcode(2))=NM.np+i
+      END DO
+!! to upper triangle for information matrix
+      CALL fcb_msu_update(.FALSE.,0,NM,infs)
+    END IF
+  END IF
+
+  RETURN
+
+END SUBROUTINE

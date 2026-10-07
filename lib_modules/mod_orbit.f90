@@ -1,0 +1,146 @@
+!*
+MODULE orbit
+!!
+!*
+USE par
+IMPLICIT NONE
+
+  CHARACTER(LEN_FORCE) :: FORCE_ALL(MAXFORCE)
+  CHARACTER(LEN_ORBPAR) :: PARAM_ALL(MAXORBPAR)
+
+  DATA FORCE_ALL                                                               &
+    /'Solid Earth tides    ','Ocean tides          ','Earth pole tide      '   &
+    ,'Ocean pole tide      ','ATM and ocean var.   ','Gravity model        '   &
+    ,'Point mass           ','Solar radiation      ','Atmosphere drag      '   &
+    ,'Relativity           ','Earth radiation      ','Customer model       '   &
+    ,'Accelerator obs.     '/
+
+  DATA PARAM_ALL                                                        &
+    /'Kd_BERN   ','Ky_BERN   ','Kb_BERN   ','Kxp1_BERN ','Kxp3_BERN '   &
+    ,'Kzp_BERN  ','Kdc1_BERN ','Kds1_BERN ','Kyc1_BERN ','Kys1_BERN '   &
+    ,'Kbc1_BERN ','Kbs1_BERN ','Kdc2_BERN ','Kds2_BERN ','Kdc4_BERN '   &
+    ,'Kds4_BERN ','DRAG_c    ','SR_scale  ','          ','          '   &
+    ,'EMP_Ac    ','EMP_Bc    ','EMP_Sc1   ','EMP_Cc1   ','EMP_Sc2   '   &
+    ,'EMP_Cc2   ','EMP_Aa    ','EMP_Ba    ','EMP_Sa1   ','EMP_Ca1   '   &
+    ,'EMP_Sa2   ','EMP_Ca2   ','EMP_Ar    ','EMP_Br    ','EMP_Sr1   '   &
+    ,'EMP_Cr1   ','EMP_Sr2   ','EMP_Cr2   ','          ','          '   &
+    ,'ACC_Bx    ','ACC_By    ','ACC_Bz    ','ACC_Kx    ','ACC_Ky    '   &
+    ,'ACC_Kz    ','          ','          ','Ky_BOXW   ','K+xad_BOXW'   &
+    ,'K-xad_BOXW','K+yad_BOXW','K-yad_BOXW','K+zad_BOXW','K-zad_BOXW'   &
+    ,'K+xr_BOXW ','K-xr_BOXW ','K+yr_BOXW ','K-yr_BOXW ','K+zr_BOXW '   &
+    ,'K-zr_BOXW ','Ksp_BOXW  ','Ksb_BOXW  ','          '/
+
+
+  TYPE :: ORBHDR
+    INTEGER(IT) :: nprn = 0
+    CHARACTER(LEN_PRN) :: cprn(MAXSAT) = ''
+    INTEGER(IT) :: mjd0 = 0
+    INTEGER(IT) :: mjd1 = 0
+    INTEGER(IT) :: rmjd = 0
+    INTEGER(IT) :: nequ = 0
+    REAL(RL) :: sod0 = 0.d0
+    REAL(RL) :: sod1 = 0.d0
+    REAL(RL) :: rsod = 0.d0
+    REAL(RL) :: dintv = 0.d0
+  END TYPE
+
+  ! binary orbit
+  TYPE ORB_INT_TAB
+    INTEGER(IT) :: lunit = 0
+    INTEGER(IT) :: ndgr = 0
+    INTEGER(IT) :: irec_inmemory = 0
+    INTEGER(IT) :: nrec_inmemory = 0
+    INTEGER(IT) :: irec_middle_alpha = 0
+    INTEGER(IT) :: nvar = 0
+    INTEGER(IT) :: mjd0 = 0
+    INTEGER(IT) :: mjd1 = 0
+    INTEGER(IT) :: nrec = 0
+    REAL(RL) :: sod0 = 0.D0
+    REAL(RL) :: sod1 = 0.D0
+    REAL(RL) :: dintv = 0.D0
+    REAL(RL) :: ec(0:MAXDGR,0:MAXDGR) = 0.D0
+  END TYPE
+
+  TYPE ORB_INT_DATA
+    REAL(RL) :: table(MAXPNT,MAXVARS) = 0.D0
+    REAL(RL) :: alpha(MAXVARS,0:MAXDGR) = 0.d0
+    REAL(RL) :: beta (MAXVARS,0:MAXDGR) = 0.d0
+  END TYPE
+
+  TYPE RKFCOEF
+    INTEGER(IT) :: m = 0
+    REAL(RL) :: alpha(0:9) = 0.d0
+    REAL(RL) :: beta(0:9,0:9) = 0.d0
+    REAL(RL) :: c(0:9) = 0.d0
+    REAL(RL) :: d(0:9) = 0.d0
+  END TYPE RKFCOEF
+
+  TYPE ADAMSCOEF
+    INTEGER(IT) :: n = 0
+    REAL(RL) :: pbeta(0:20) = 0.d0
+    REAL(RL) :: cbeta(0:20) = 0.d0
+  END TYPE ADAMSCOEF
+
+  TYPE ORBCFG
+    INTEGER(IT) :: mjd0 = 0
+    INTEGER(IT) :: mjd1 = 0
+    INTEGER(IT) :: rmjd = 0
+    INTEGER(IT) :: mjd = 0
+    REAL(RL) :: sod0 = 0.d0
+    REAL(RL) :: sod1 = 0.d0
+    REAL(RL) :: rsod = 0.d0
+    REAL(RL) :: sod = 0.d0
+    REAL(RL) :: dintv = 0.d0
+    REAL(RL) :: unit = 0.d0
+
+    INTEGER(IT) :: nequ = 0
+    INTEGER(IT) :: nprn = 0
+    CHARACTER(LEN_PRN) :: cprn(MAXSAT) = ''
+
+    INTEGER(IT) :: norder_adams = 0
+    REAL(RL) :: int_step = 0.d0
+    REAL(RL) :: out_step = 0.d0
+
+    CHARACTER(LEN_STRING) :: helm = ''
+    CHARACTER(LEN_FILENAME) :: flnics = ''
+    CHARACTER(LEN_FILENAME) :: flnorb = ''
+    CHARACTER(LEN_FILENAME) :: flnsp3 = ''
+    CHARACTER(LEN_FILENAME) :: flndif = ''
+    CHARACTER(LEN_FILENAME) :: flncck = ''
+    CHARACTER(LEN_FILENAME) :: flnpar = ''
+    CHARACTER(LEN_FILENAME) :: brdc(MAXSYS+1) = ''
+
+    LOGICAL(LG) :: lpart = .FALSE.
+    LOGICAL(LG) :: lacr = .TRUE.
+    LOGICAL(LG) :: lbdt = .FALSE.
+    LOGICAL(LG) :: leop = .FALSE.
+
+    LOGICAL(IT) :: lgfm = .FALSE.
+    INTEGER(IT) :: mindeg = 0
+    INTEGER(IT) :: maxdeg = 0
+    INTEGER(IT) :: ngc = 0
+    INTEGER(IT) :: ltog(0:MAXGRADEG,0:MAXGRADEG,2) = 0
+  END TYPE ORBCFG
+
+  TYPE PLANET_INFO
+    INTEGER(IT) :: nplanet = 0
+    INTEGER(IT) :: isc = 0
+    INTEGER(IT) :: icb = 0
+    INTEGER(IT) :: isun = 0
+    CHARACTER(11):: name(MAXPLANET) = ''
+    REAL(RL) :: gm(MAXPLANET) = 0.d0
+    REAL(RL) :: radius(MAXPLANET) = 0.d0
+    REAL(RL) :: xj(6,MAXPLANET) = 0.d0
+    REAL(RL) :: xe(6,MAXPLANET) = 0.d0
+    REAL(RL) :: dist2cb(MAXPLANET) = 0.d0
+    REAL(RL) :: dist2sc(MAXPLANET) = 0.d0
+  END TYPE PLANET_INFO
+
+  TYPE SOLID_TIDE_FREQ
+    INTEGER(IT) :: n = 0
+    INTEGER(IT), POINTER :: etf(:,:)
+    REAL(RL), POINTER :: kf(:,:)
+    REAL(RL), POINTER :: amp(:,:)
+  END TYPE
+
+END MODULE

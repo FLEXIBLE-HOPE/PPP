@@ -1,0 +1,99 @@
+!
+!! purpose   : count number of the three types of parameters
+!!             process, state and determinated parameters
+!
+
+SUBROUTINE fcb_cnt_prmt(CKF,SIT,NM)
+!!
+!*
+USE info
+USE ckdctrl
+USE station
+USE ISO_FORTRAN_ENV
+IMPLICIT NONE
+
+!*
+! The arguments
+!!---------------------
+TYPE(CKDCFG) :: CKF
+TYPE(SITE) :: SIT
+TYPE(INFM) :: NM
+
+  !*
+  ! The local variables
+  !!-----------------------------
+  INTEGER(IT) :: i,isat,isys
+
+  !*
+  ! Start the exectuable code
+  !!-----------------------------
+
+  NM.np=0
+  NM.nc=0
+  NM.ns=0
+  NM.npc=0
+
+  !! receiver clock offsets
+  IF (CKF%lisb) THEN
+    NM.np=NM.np+1
+    NM.nc=NM.nc+CKF.nsys-1
+  ELSE
+    NM.np=NM.np+CKF.nsys
+  END IF
+  !! IFB parameters for GLONASS
+  IF (INDEX(CKF.system,'R').NE.0 .AND.  CKF.iref.EQ.INDEX(SYS,'G')) THEN
+    NM.nc=NM.nc-1
+    DO isat=1, CKF.nprn
+      IF (CKF.cprn(isat)(1:1) .EQ. 'R') THEN
+        NM.nc=NM.nc+1
+      END IF
+    END DO
+  ELSE IF (CKF.iref .EQ. INDEX(SYS,'R')) THEN
+    NM.nc=NM.nc-1
+    DO isat=1, CKF.nprn
+      IF (CKF.cprn(isat)(1:1) .EQ. 'R') THEN
+        NM.nc=NM.nc+1
+      END IF
+    END DO
+  END IF
+
+  !! atmospheric parameters is process parameters
+  IF (CKF%ztdmod(1:4).NE.'NONE' .AND. CKF%ztdmod(1:3).NE.'FIX' .AND. SIT%skd(1:1).NE.'D') THEN
+    NM.np=NM.np+1
+  END IF
+
+  !! atmospheric grident parameters
+  IF (CKF.grdmod(1:4).NE.'NONE' .AND. CKF%grdmod(1:3).NE.'FIX' .AND. SIT.skd(1:1).NE.'D') THEN
+    NM.np=NM.np+2
+  END IF
+
+  !! slant ionosphere-delay for each satellite
+  IF (CKF.cobs(1:3) .EQ. 'RAW') THEN
+    NM.np=NM.np+CKF.nprn
+  END IF
+ 
+  ! @CMT BY XSY: [RECDCB] The third frequency code observation is a useless contribution because its' low wight
+  !! the third frequency code bias, only for multi-frequency ppp is need because the code osb is corrected, in some case, it may be estimated for the same system
+  IF (CKF%lrecdcb) THEN
+    IF (TRIM(CKF.cobs) .EQ. 'RAW') THEN
+      DO isat=1, CKF.nprn
+        isys=INDEX(SYS,CKF.cprn(isat)(1:1))
+        IF (CKF.nfq(isys) .GE. 3) THEN
+          NM.nc=NM.nc+CKF.nfq(isys)-2
+        END IF
+      END DO
+    END IF
+  END IF
+
+  NM.npc=NM.np+NM.nc
+  NM.imtx=NM.npc+NM.ns
+
+  !! check consistence
+  IF (NM.imtx .GT. MAXPARSIT) THEN
+    WRITE(ERROR_UNIT,'(A)') '***ERROR(fcb_cnt_prmt): too many parameters'
+    CALL exit(1)
+  END IF
+
+  RETURN
+
+END SUBROUTINE

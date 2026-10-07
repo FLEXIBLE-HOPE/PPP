@@ -1,0 +1,134 @@
+!*
+MODULE satellite
+!*
+USE const
+USE par
+IMPLICIT NONE
+
+  TYPE SATE
+    CHARACTER(LEN_PRN) :: cprn = ''
+    CHARACTER(LEN_PRN) :: csvn = ''
+    CHARACTER(LEN_SATTYPE) :: type = ''
+    CHARACTER(LEN_PCVTYPE) :: pcv = ''
+    CHARACTER(LEN_CLKTYPE) :: clk = ''
+    CHARACTER(LEN_COSPARID) :: sid = ''
+
+    INTEGER(IT) :: iptatx = 0
+    INTEGER(IT) :: lepo = 0
+
+    REAL(RL) :: mass = 0.D0
+
+    REAL(RL) :: dclk0 = 0.D0
+    REAL(RL) :: qclk = 0.D0
+    REAL(RL) :: sclock = 0.D0
+    REAL(RL) :: epclk = 0.D0
+    REAL(RL) :: inclk = 0.D0
+
+    ! Offset for SLR array
+    REAL(RL) :: offs(3) = 0.D0
+    ! offset for ISL antenna
+    REAL(RL) :: isl(3) = 0.d0
+    ! Pahse center offsets
+    REAL(RL) :: xyz(3,MAXFREQ) = 0.D0      !PCO: read GPS atx,星固系,[m]
+    REAL(RL) :: xscf(3) = 0.D0
+    REAL(RL) :: yscf(3) = 0.D0
+    REAL(RL) :: zscf(3) = 0.D0
+    ! Offsets for onboard GNSS receiver antenna
+    REAL(RL) :: xyz0(3) = 0.D0
+    REAL(RL) :: bvec(3) = 0.D0
+    REAL(RL) :: avec(3) = 0.D0
+    REAL(RL) :: rant(3,3) = 0.D0
+    ! Satellite pos
+    REAL(RL) :: satpos(6) = 0.d0
+
+    INTEGER(IT) :: ifreq = 0
+    REAL(RL) :: freq(MAXFREQ) = 0.D0
+    REAL(RL) :: lamda(MAXFREQ) = 0.D0
+    REAL(RL) :: g = 0.D0
+    REAL(RL) :: g2 = 0.D0
+    REAL(RL) :: lamdw = 0.D0
+    REAL(RL) :: lamdn = 0.D0
+    REAL(RL) :: fac(2) = 0.D0
+
+    INTEGER(IT) :: npar = 0
+    CHARACTER(LEN_PARNAME) :: pname(MAXICS) = ''
+    REAL(RL) :: dx0(MAXICS) = 0.D0
+
+    INTEGER(IT) :: nforce
+    CHARACTER(LEN_FORCE) :: force_name(MAXFORCE)
+    CHARACTER(LEN_STRING) :: force_model(MAXFORCE)
+
+    CHARACTER(LEN_FILENAME) :: flnatt=''
+    CHARACTER(LEN_FILENAME) :: flnacc=''
+
+    ! state
+    REAL(RL) :: x(MAXICS) = 0.d0
+    ! random noise
+    REAL(RL) :: qx(MAXICS) = 0.d0
+    ! state transtion matrix
+    REAL(RL) :: phi(6*MAXICS) = 0.d0
+
+    !!xsy-22-9-17: code osb and phase osb
+    REAL(RL) :: cosb(MAXFREQ) = 0.d0
+    REAL(RL) :: posb(MAXFREQ) = 0.d0
+    REAL(RL) :: cosbstd(MAXFREQ) = 0.d0
+    REAL(RL) :: posbstd(MAXFREQ) = 0.d0
+
+    CHARACTER(LEN_PRN) :: cosbtype(MAXOBSTYP) = ''
+    CHARACTER(LEN_PRN) :: posbtype(MAXOBSTYP) = ''
+   
+    !! xsy:2023-05-26: osbMode for UPD[epoch], NOTE: 16 is the lengh of OBSTYPE
+    !2:C/L  10:频率号  16:通道数
+    REAL(RL) :: osbValue(2,10,16) = 0.d0
+
+    !! xsy: 一次性读完所有OSB,兼容ICLK
+    !xsy:2023-11-29: osb bias for mult-frequency considering the epoch change
+    !    2: CODE/PHASE
+    !   10: index of frequency
+    !   16: index of channel
+    !   96: index of epoch, 900 [s]
+    REAL(RL) :: osbBias(2,10,16,96) = -999.d0
+    !   slope is only for the third frquency of phase osb
+    REAL(RL) :: osbBiasSlope(10,16,96) = 0.d0
+    !    2: sod of start and end epoch
+    REAL(RL) :: osbTimeSpan(2,10,16,96,2) = 0.d0
+
+    !@CMT BY XSY: used for rnxcmp
+    REAL(RL) :: mlp1_coff1 = 0.D0
+    REAL(RL) :: mlp1_coff2 = 0.D0
+    REAL(RL) :: mlp2_coff1 = 0.D0
+    REAL(RL) :: mlp2_coff2 = 0.D0
+  END TYPE
+
+  TYPE SATEPAR
+    INTEGER(IT) :: npar = 0
+    INTEGER(IT) :: npwc(MAXICS) = 0
+    REAL(RL) :: val(MAXPWC*MAXICS) = 0.d0
+    REAL(RL) :: ptime(2,MAXPWC*MAXICS) = 0.d0
+  END TYPE
+
+  TYPE SATEPAN
+    CHARACTER(LEN_PRN) :: cprn
+    INTEGER(IT) :: npan = 0
+    CHARACTER(20):: name(MAXPANS)
+    ! area
+    REAL(RL) :: area(MAXPANS)=0.d0
+    ! fraction of absorbed photons
+    REAL(RL) :: alpha(MAXPANS)=0.d0
+    ! fraction of reflected photons
+    REAL(RL) :: delta(MAXPANS)=0.d0
+    ! fraction of diffusely scattered photons
+    REAL(RL) :: rho(MAXPANS)=0.d0
+    ! drag coefficient
+    REAL(RL) :: drag(MAXPANS)=0.d0
+    ! invisible part
+    REAL(RL) :: deltai(MAXPANS)=0.d0
+    ! invisible part
+    REAL(RL) :: rhoi(MAXPANS)=0.d0
+    ! the normal direction in spacecraft reference frame
+    REAL(RL) :: norm(3,MAXPANS)=0.d0
+    ! the normal direction in initral system
+    REAL(RL) :: normj(3,MAXPANS)=0.d0
+  END TYPE
+
+END MODULE

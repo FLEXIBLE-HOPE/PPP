@@ -1,0 +1,176 @@
+# 1 "/home/xfd/data/PPP/src/lib_modules/mod_amb.f90"
+!*
+MODULE ambiguity
+!*
+USE par
+IMPLICIT NONE
+
+  TYPE AMBOW
+! The site name
+    CHARACTER(LEN_SITENAME) :: sname = ''
+! The number of ambiguities
+    INTEGER(IT) :: namb = 0
+! The PRN of satellites
+    CHARACTER(LEN_PRN) :: cprn(MAXAMBSIT) = ''
+! The raw ambiguities
+    REAL(RL) :: raw(MAXAMBSIT) = 0.D0
+! The sigma of ambiguities
+    REAL(RL) :: sig(MAXAMBSIT) = 0.D0
+! The mean elevation of ambiguities
+    REAL(RL) :: elev(MAXAMBSIT) = 0.D0
+! The live time of ambiguities
+    REAL(RL) :: time(2,MAXAMBSIT) = 0.D0
+  END TYPE
+
+  TYPE AMBUD
+    INTEGER(IT) :: ipt(2)=0
+    REAL(RL) :: raw=0.d0
+    REAL(RL) :: time(2)=0.d0
+  END TYPE
+
+  TYPE AMBSD
+! The pointer to one-way ambiguity
+    INTEGER(IT) :: ipt(2) = 0
+! The time
+    REAL(RL) :: time(2) = 0.d0
+  END TYPE
+
+
+  TYPE AMBDD
+! The pointer to one-way ambiguity
+    INTEGER(IT) :: ipt(4) = 0
+! The time
+    REAL(RL) :: time(2) = 0.d0
+! IF it is the independent ambiguity
+    LOGICAL(LG) :: lselected = .FALSE.
+! Status:   0:unfix   1:EWL-fix   2:WL-fix   4:NL-fix
+    INTEGER(IT) :: ifab = 0
+    REAL(RL) :: wl = 0.d0
+    REAL(RL) :: nl = 0.d0
+    REAL(RL) :: lc = 0.d0
+    REAL(RL) :: swl = 0.d0
+    REAL(RL) :: snl = 0.d0
+    REAL(RL) :: slc = 0.d0
+  END TYPE
+
+!! fractional Cycle Biased
+  TYPE FCB
+! The number of satellite-difference ambiguities
+    INTEGER(IT) :: npp = 0
+! The PRN of satellites
+    CHARACTER(LEN_PRN) :: cprn(2,MAXPP) = ''
+! The number of candidate satellite-difference ambiguities to be selected
+    INTEGER(IT) :: wcad(MAXPP) = 0
+! The estimate of satellite-difference FCBs
+    REAL(RL) :: fwl(MAXPP) = 0.D0
+! The RMS of satellite-difference FCBs
+    REAL(RL) :: vwl(MAXPP) = 0.D0
+! The sigma of satellite-difference FCBs
+    REAL(RL) :: swl(MAXPP) = 0.D0
+
+!! Undifferenced FCBs
+    REAL(RL) :: hewfcb(MAXSAT) = 10.D0
+    REAL(RL) :: hewsl(MAXSAT) = 0.D0
+    REAL(RL) :: eewfcb(MAXSAT) = 10.D0
+    REAL(RL) :: eewsl(MAXSAT) = 0.D0
+    REAL(RL) :: ewfcb(MAXSAT) = 10.D0
+    REAL(RL) :: ewsl(MAXSAT) = 0.D0
+    REAL(RL) :: wfcb(MAXSAT) = 10.D0
+    REAL(RL) :: wsl(MAXSAT) = 0.D0
+    REAL(RL) :: nfcb(MAXSAT) = 10.D0
+    REAL(RL) :: nsl(MAXSAT) = 0.D0
+
+!! 2023-09-11 by xsy: FCB map to OSB
+    REAL(RL) :: l5osb(MAXSAT) = 10.D0
+    REAL(RL) :: l5sig(MAXSAT) = 0.D0
+    REAL(RL) :: l4osb(MAXSAT) = 10.D0
+    REAL(RL) :: l4sig(MAXSAT) = 0.D0
+    REAL(RL) :: l3osb(MAXSAT) = 10.D0
+    REAL(RL) :: l3sig(MAXSAT) = 0.D0
+    REAL(RL) :: l2osb(MAXSAT) = 10.D0
+    REAL(RL) :: l2sig(MAXSAT) = 0.D0
+    REAL(RL) :: l1osb(MAXSAT) = 10.D0
+    REAL(RL) :: l1sig(MAXSAT) = 0.D0
+
+!! UPD reference satellite
+    CHARACTER(LEN_PRN) :: updrefsat(MAXSYS,5) = ''
+
+!! 2023-10-12 by xsy: Bias[FCB] between different receiver types, including [NL/WL/EWL/EEWL/HEWL,types,bias/STD]
+    CHARACTER(LEN=30) :: rectype(MAXRECTYPE) = ''
+    REAL(RL) :: recfcb(MAXSAT,5,MAXRECTYPE) = 0.D0
+    REAL(RL) :: recfcbstd(MAXSAT,5,MAXRECTYPE) = 10.D0
+  END TYPE
+
+!! Ambiguity definition
+  TYPE AMBT
+! the name of parameter
+    CHARACTER(LEN_PARNAME) :: pname = ''
+! Status:   0:unfix     1:EWL-fix   2:WL-fix    4:NL-fix
+    INTEGER(IT) :: ifab = 0
+! Number of observations    与模糊度有关的观测数：RAW：1；IF：2, iobs与周跳不挂钩
+    INTEGER(IT) :: iobs = 0
+! ID of satellite           第几颗卫星
+    INTEGER(IT) :: psat = 0     
+! frequenct                 第几个频率
+    INTEGER(IT) :: ifreq = 0
+! Mean elevation angle in degree    平均高度角
+    REAL(RL) :: elev  = 0.d0
+! Duration, ending time of an ambiguity     模糊度时间跨度
+    REAL(RL) :: ptime(2) = 0.d0
+! A priori & correction for primary filter  模糊度初值、改正数、精度
+    REAL(RL) :: xini = 0.d0
+    REAL(RL) :: xcor = 0.d0
+    REAL(RL) :: xsig = 0.d0
+    REAL(RL) :: famb = 0.d0 !浮点模糊度估值
+! Widelane and narrowlane
+    REAL(RL) :: abwl = 0.5d0    !  宽巷固定解
+    REAL(RL) :: abewl = 0.5d0   !超宽巷固定解
+    REAL(RL) :: abnl = 0.5d0    !  窄巷固定解
+    REAL(RL) :: abeewl = 0.5d0  !xsy
+    REAL(RL) :: abhewl = 0.5d0  !xsy
+! cycle slip on L1 and L2
+    REAL(RL) :: ewcls = 0.5d0
+    REAL(RL) :: wcls = 0.5d0
+    REAL(RL) :: ncls = 0.5d0
+    REAL(RL) :: eewcls = 0.5d0  !xsy
+    REAL(RL) :: hewcls = 0.5d0  !xsy
+! initial value of wide-lane ambiguity
+    REAL(RL) :: abin = 0.d0
+    REAL(RL) :: abein = 0.d0
+! Statistics of a widelane
+    REAL(RL) :: weig = 0.d0
+    REAL(RL) :: eweig = 0.d0
+    REAL(RL) :: eeweig = 0.d0   !xsy
+    REAL(RL) :: heweig = 0.d0   !xsy
+    REAL(RL) :: xrwl = 0.d0
+    REAL(RL) :: xswl = 0.d0
+    REAL(RL) :: sigw = 0.d0     !xsy.
+    REAL(RL) :: xrewl = 0.d0
+    REAL(RL) :: xsewl = 0.d0
+    REAL(RL) :: sigew = 0.d0    !xsy.
+    REAL(RL) :: xreewl = 0.d0   !xsy
+    REAL(RL) :: xseewl = 0.d0   !xsy
+    REAL(RL) :: xrhewl = 0.d0   !xsy
+    REAL(RL) :: xshewl = 0.d0   !xsy
+
+! real EWl and WL
+    REAL(RL) :: fhewl =0.d0     !xsy
+    REAL(RL) :: feewl =0.d0     !xsy
+    REAL(RL) :: fewl=0.d0
+    REAL(RL) :: fwl=0.d0
+  END TYPE
+
+! Used as auxiliary arrays
+  TYPE AMBD
+! Status:   -1:redundant多余模糊度（没有信息,选星）    0:unfixed没固定   1:fixed固定     2:pseudo-fixed伪固定
+    INTEGER(IT) :: abst = 0
+! Pointer to ambt   !模糊度指针，指向AMBT第几个模糊度
+    INTEGER(IT) :: pab = 0  
+! Ambiguity property for re-ordering
+    REAL(RL) :: stad = 0.d0
+! Unfixed & fixed ambiguity value
+    REAL(RL) :: abfr = 0.d0 !未固定的模糊度值
+    REAL(RL) :: abfx = 0.d0 !  固定的模糊度值
+  END TYPE
+
+END MODULE

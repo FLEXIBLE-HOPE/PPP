@@ -1,0 +1,215 @@
+!*
+SUBROUTINE everett_interp_orbit_post(flnorb,lpos,lvel,mjd,sod,prn,x,v)
+!!
+!! purpose  : everett interplolation of satellite position and partial derivatives
+!!            based on table data
+!!
+!! parameter: iprn -- satellite PRN
+!!            lcheck_only -- read table file head and check if the table is ok
+!!                          for desired interpolation. Time, and return ref. time of ICS
+!!            lpos  -- .true. for position
+!!            lvel  -- .true. for velocity
+!!            lpartial -- .true. for partial derivatives
+!!            jd,sod  -- time of the requested point
+!!            x,v,part  -- interpolated position, velocity and partial derivatives
+!!
+!! created  : Maorong Ge, Feb 1993
+!! modified : Jianghui Geng, May 2011: missing satellites
+!!
+!*
+USE const
+USE orbit
+USE ISO_FORTRAN_ENV
+IMPLICIT NONE
+
+!*
+! The arguments
+!!-------------------
+LOGICAL(LG) :: lpos,lvel
+INTEGER(IT) :: mjd
+REAL(RL) :: sod,x(1:*),v(1:*)
+CHARACTER(LEN=*) :: flnorb
+TYPE(ORBHDR) :: OH
+CHARACTER(LEN_PRN) :: prn
+
+  !*
+  ! The local variables
+  !!------------------------
+  LOGICAL(LG) :: lfirst,update_alpha,update_memory
+  INTEGER(IT) :: iprn,nprn
+  CHARACTER(LEN_PRN) :: cprn(MAXSAT)
+  INTEGER(IT) :: ierr,ipos,i,j,k,ivar,jpos
+  REAL(RL) :: s,u,s2,u2,sum1,sum2
+  TYPE(ORB_INT_TAB) :: EI
+  TYPE(ORB_INT_DATA) :: DT(MAXSAT)
+
+  DATA lfirst,EI.lunit/.TRUE.,0/
+  SAVE lfirst,EI,DT,nprn,cprn
+
+  !*
+  ! The function called
+  !!--------------------------
+  INTEGER(IT) :: get_valid_unit
+  INTEGER(IT) :: pointer_string
+  REAL(RL) :: timdif
+
+  !*
+  ! Start the exectuable code
+  !!---------------------------
+
+  !! first time call
+  IF (lfirst .EQ. .TRUE.) THEN
+
+    lfirst = .FALSE.
+
+    !! read header of the orbit file
+    CALL rdorbh(flnorb,EI.lunit,OH)
+
+    EI.mjd0=OH.mjd0
+    EI.sod0=OH.sod0
+    EI.dintv=OH.dintv
+    EI.mjd1=OH.mjd1
+    EI.sod1=OH.sod1
+    EI.nvar=OH.nequ
+    EI.nrec=NINT(timdif(OH.mjd1,OH.sod1,OH.mjd0,OH.sod0)/OH.dintv)+1
+    nprn=OH.nprn
+    DO i=1,nprn
+      cprn(i)=OH.cprn(i)
+    END DO
+    EI.ndgr=6
+    IF (EI.nvar .GT. MAXVARS) THEN
+      WRITE(ERROR_UNIT,'(A,2I3)') '***ERROR(everett_interp_orbit_post): EI.nvar larger than MAXVARS,',EI.nvar,MAXVARS
+      CALL exit(1)
+    ENDIF
+    IF (EI.ndgr .GT. MAXDGR) THEN
+      WRITE(ERROR_UNIT,'(A,2I3)') '***ERROR(everett_interp_orbit_post): EI.ndgr larger than MAXDGR',EI.ndgr,MAXDGR
+      CALL exit(1)
+    END IF
+
+    EI.irec_inmemory=0
+    EI.nrec_inmemory=0
+    EI.irec_middle_alpha=0
+    CALL everett_coeff(MAXDGR,EI.ndgr,EI.ec)
+  END IF
+
+  !! check time
+  IF (timdif(mjd,sod,EI.mjd0,EI.sod0).LT.-MAXWND .OR. timdif(mjd,sod,EI.mjd1,EI.sod1).GT.MAXWND) THEN
+    WRITE(ERROR_UNIT,'(A,I5,F9.1)') '***ERROR(everett_interp_orbit_post): arc not cover epoch ',mjd,sod
+    CALL exit(1)
+  END IF
+
+  !! which satellite
+  iprn=pointer_string(nprn,cprn,prn)
+  IF (iprn .EQ. 0) THEN
+    x(1:3)=1.d15
+    v(1:3)=1.d15
+    RETURN
+  END IF
+
+  !! interpolation center
+  ipos=INT((mjd-EI.mjd0)*(86400.d0/EI.dintv)+(sod-EI.sod0)/EI.dintv)+1
+  IF (ipos .LE. EI.ndgr) THEN   ! Geng. 9/29/2006 'lt'-->'le'
+    ipos=EI.ndgr+1           ! Geng. 7/02/2006 interpolation at beginning is allowed
+  ELSE IF (ipos+EI.ndgr+1 .GT. EI.nrec) THEN
+    ipos=EI.irec_middle_alpha
+  END IF
+
+  !! check if we have to update alpha and beta
+  update_alpha=ipos .GT. EI.irec_middle_alpha
+
+  !! check if we have enough data in memory.
+  !! for interpolation, 2(n+1) points are needed. In case of a multi-points table,
+  !! at least, two lines should be in memory
+  update_memory=update_alpha
+  DO WHILE(update_memory)
+    update_memory=EI.nrec_inmemory.LT.2*EI.ndgr+2 .OR. &
+          ipos+EI.ndgr+1.GT.EI.irec_inmemory+EI.nrec_inmemory
+    IF (.NOT.update_memory) EXIT
+    IF (EI.nrec_inmemory .GE. 2*EI.ndgr+2) THEN
+      EI.nrec_inmemory=EI.nrec_inmemory-1
+      EI.irec_inmemory=EI.irec_inmemory+1
+      DO k=1, nprn
+        DO j=1, EI.nvar
+          DO i=1, EI.nrec_inmemory
+            DT(k).table(i,j)=DT(k).table(i+1,j)
+          END DO
+        END DO
+      END DO
+    END IF
+    READ(EI.lunit,END=300) ((DT(i).table(EI.nrec_inmemory+1,j),j=1,EI.nvar),i=1,nprn)
+    EI.nrec_inmemory=EI.nrec_inmemory+1
+  END DO
+
+  !
+  !! update alpha and beta
+  IF (update_alpha) THEN
+    EI.irec_middle_alpha=ipos
+    jpos=ipos-EI.irec_inmemory
+    DO i=1,nprn
+      !! if missing, alpha and beta then unavailable
+      IF (ANY(DT(i).table(1:EI.nrec_inmemory,1) .EQ. 1.d15)) THEN
+        DT(i).alpha(1,0:EI.ndgr)=0.d0
+        CYCLE
+      END IF
+      DO ivar=1, EI.nvar
+        DO k=0,EI.ndgr
+          DT(i).alpha(ivar,k)=0.d0
+          DT(i).beta (ivar,k)=0.d0
+          DO j=0,EI.ndgr
+            DT(i).alpha(ivar,k)=DT(i).alpha(ivar,k)+EI.ec(k,j)* &
+                  (DT(i).table(jpos-j  ,ivar)+DT(i).table(jpos+j  ,ivar))
+            DT(i).beta (ivar,k)=DT(i).beta (ivar,k)+EI.ec(k,j)* &
+                  (DT(i).table(jpos-j+1,ivar)+DT(i).table(jpos+j+1,ivar))
+          END DO
+        END DO
+      END DO
+    END DO
+  END IF
+
+  !! if missing ..., send a note to upper-level routine
+  IF (ALL(DT(iprn).alpha(1,0:EI.ndgr) .EQ. 0.d0)) THEN
+    x(1:3)=1.d15
+    v(1:3)=1.d15
+    RETURN
+  END IF
+
+  !! interpolation
+  s=(mjd-EI.mjd0)*(86400.d0/EI.dintv)+(sod-EI.sod0)/EI.dintv+1.d0-EI.irec_middle_alpha
+  u=s-1.d0
+  s2=s*s
+  u2=u*u
+
+  DO ivar=1,3
+    sum1=DT(iprn).beta (ivar,EI.ndgr)
+    sum2=DT(iprn).alpha(ivar,EI.ndgr)
+    DO k=EI.ndgr,1,-1
+      sum1=sum1*s2+DT(iprn).beta (ivar,k-1)
+      sum2=sum2*u2+DT(iprn).alpha(ivar,k-1)
+    END DO
+    sum1=sum1*s-sum2*u
+    x(ivar)=sum1
+    IF (ivar.LE.3 .AND. lvel) THEN
+      sum1=DT(iprn).beta (ivar,EI.ndgr)*(2.d0*EI.ndgr+1.d0)
+      sum2=DT(iprn).alpha(ivar,EI.ndgr)*(2.d0*EI.ndgr+1.d0)
+      DO k=EI.ndgr,1,-1
+        sum1=sum1*s2+DT(iprn).beta (ivar,k-1)*(2.d0*(k-1.d0)+1.d0)
+        sum2=sum2*u2+DT(iprn).alpha(ivar,k-1)*(2.d0*(k-1.d0)+1.d0)
+      END DO
+      v(ivar)=(sum1-sum2)/EI.dintv
+    END IF
+  END DO
+
+  RETURN
+
+300 CONTINUE
+  WRITE(ERROR_UNIT,'(A)') '***ERROR(everett_interpolate_orbit_post): end of file '
+  CALL exit(1)
+
+!! reset for a new predicted orbit
+ENTRY everett_reset_post()
+
+  lfirst=.TRUE.
+  CLOSE(EI.lunit)
+  RETURN
+
+END SUBROUTINE

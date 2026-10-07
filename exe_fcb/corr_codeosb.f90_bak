@@ -1,0 +1,271 @@
+!*
+SUBROUTINE corr_codeosb(CKF,OB,SAT,SIT,isit)
+!!
+!! Correction for one-day Code OSB
+!!
+!*
+USE const
+USE ckdctrl
+USE observation
+USE satellite
+USE station
+USE ISO_FORTRAN_ENV
+IMPLICIT NONE
+
+!*
+! The arguments
+!!------------------------
+TYPE(CKDCFG) :: CKF
+TYPE(RNXOBS) :: OB
+TYPE(SITE) :: SIT
+TYPE(SATE) :: SAT(MAXSAT)
+INTEGER(IT) :: isit
+
+    !*
+    ! The local variables
+    !!------------------------
+    INTEGER(IT) :: isat,ifreq,iy,imon,id,ih,im 
+    LOGICAL(LG) :: lfirst(MAXSIT)
+    CHARACTER(LEN=4) :: flag
+    REAL(RL) :: osb_corr(MAXSAT,MAXFREQ,4,MAXSIT),sec
+    DATA lfirst /MAXSIT*.TRUE./
+    SAVE osb_corr,lfirst
+
+    INTEGER(IT) :: pointer_string
+
+    !*
+    ! Start the exectuable code
+    !!-------------------------------
+    !! 读OSB文件
+    IF (lfirst(isit) .EQ. .TRUE.) THEN
+        CALL read_codeosb(CKF,SAT,osb_corr(1,1,1,isit),OB,isit)
+        lfirst(isit) = .FALSE.
+    END IF
+
+    !! time tag
+    CALL mjd2date(CKF.mjd,CKF.sod,iy,imon,id,ih,im,sec)
+    WRITE(1008,'(A3,I5,4I3,F11.7,I7,F10.2)') 'TIM',iy,imon,id,ih,im,sec,CKF.mjd,CKF.sod  
+    
+    DO isat=1, CKF.nprn
+      DO ifreq=1, MAXFREQ
+        flag = ''
+        IF (OB.obs(isat,ifreq+MAXFREQ) .NE. 0) THEN
+          OB.obs(isat,ifreq+MAXFREQ) = OB.obs(isat,ifreq+MAXFREQ) - (osb_corr(isat,ifreq,1,isit)*VEL_LIGHT*1.0d-9)
+          IF (osb_corr(isat,ifreq,1,isit) .EQ. 0.d0) flag = 'NONE'
+          WRITE(1008,'(2X,A5,(A),2A4,1X,F14.4,A5,F14.3,A4,F14.3)')SIT.name,'  CODE: ',CKF.cprn(isat),OB.fob(isat,ifreq+MAXFREQ),osb_corr(isat,ifreq,1,isit),&
+                flag,OB.obs(isat,ifreq+MAXFREQ)+osb_corr(isat,ifreq,1,isit)*VEL_LIGHT*1.0d-9,' => ',OB.obs(isat,ifreq+MAXFREQ)
+        END IF
+      END DO
+    END DO
+
+  RETURN
+
+END SUBROUTINE
+
+
+!* 
+SUBROUTINE read_codeosb(CKF,SAT,osb_corr,OB,isit)
+!*xsy:2022-10-27
+!
+USE ckdctrl
+USE observation
+USE satellite
+IMPLICIT  NONE
+!*
+! the arguments
+!!-----------------------------
+TYPE(ckdcfg)  :: CKF
+TYPE(SATE)    :: SAT(MAXSAT)
+REAL(RL) :: osb_corr(MAXSAT,MAXFREQ,4)
+TYPE(rnxobs)  :: OB
+INTEGER(IT) :: isit
+
+  !*
+  !  The local variables
+  !!-----------------------------
+  LOGICAL(LG) :: lfirst,lexist
+  INTEGER(IT) :: i,j,k,iyear,idoy,year,doy,ifreq,isys
+  
+  INTEGER(IT) :: lfnosb,ierr
+  INTEGER(IT) :: mjdx,isat
+  REAL(RL) :: sodx,osb,std
+  CHARACTER(LEN_STRING) :: line
+  
+  CHARACTER(LEN_PRN) :: cprn,freqtp
+
+  !*
+  ! The function called
+  !!-----------------------------
+  INTEGER(IT) :: modified_julday
+  INTEGER(IT) :: get_valid_unit
+  INTEGER(IT) :: pointer_string
+  !*
+  ! Start the exectuable code
+  !!-----------------------------
+  
+  CALL mjd2doy(CKF.mjd0,iyear,idoy)
+    
+    INQUIRE(FILE=CKF.flnosbcode, EXIST=lexist)
+    IF (lexist .EQ. .TRUE.)THEN
+      lfnosb = get_valid_unit(10)
+      OPEN(UNIT=lfnosb,FILE=CKF.flnosbcode,STATUS='OLD')
+      line=' '
+      !! 读取OSB文件第一行，判断时间是否匹配
+      READ(lfnosb,'(a)',END=100) line
+      READ(line,'(34X,I4,1X,I3)') year,doy
+      
+      IF (year .NE. iyear .OR. doy .NE. idoy) THEN
+        WRITE(ERROR_UNIT,'(A)') '***WARNING(read_osb): the osb file is mismatch '//TRIM(CKF.flnosbcode)
+        RETURN
+      END IF 
+            
+      DO WHILE(INDEX(line,'+BIAS/SOLUTION') .EQ. 0)
+        READ(lfnosb,'(a)',END=100) line
+      END DO
+      READ(lfnosb,'(a)',END=100) line
+    ELSE
+      WRITE(ERROR_UNIT,'(A)') '***WARNING(read_osb): the osb file is not exist '//TRIM(CKF.flnosbcode)
+      RETURN
+    END IF
+
+    !! 读取osb,获取指定通道的伪距OSB
+    DO WHILE(INDEX(line,'-BIAS/SOLUTION') .EQ. 0)
+      line = ' '
+      READ(lfnosb,'(a)',END=100) line
+      READ(line,'(11X,A3,11X,A3,40X,F23.4,1X,F11.4)')cprn,freqtp,osb,std
+      isys = index(SYS,cprn(1:1))
+      IF(isys .EQ. 0) CYCLE
+      
+      isat = pointer_string(CKF.nprn,CKF.cprn,cprn)
+      
+      IF (isat .NE. 0) THEN
+      
+        IF (freqtp(1:1) .EQ. 'C') THEN
+          
+          ifreq = pointer_string(CKF.nfreq(isys), OB.code_type(:,isys),freqtp)
+          
+          IF (ifreq .NE. 0) THEN
+            SAT(isat).cosbstd(ifreq) = std
+            osb_corr(isat,ifreq,1) = osb
+            osb_corr(isat,ifreq,2) = std
+          END IF
+          
+        ELSE if(freqtp(1:1) .EQ. 'L') THEN
+        
+          ifreq = pointer_string(CKF.nfreq(isys),OB.phase_type(:,isys),freqtp)
+          
+          IF (ifreq .NE. 0) THEN
+            SAT(isat).posbstd(ifreq) = std
+            osb_corr(isat,ifreq,3) = osb
+            osb_corr(isat,ifreq,4) = std
+          END IF
+          
+        END IF     
+      END IF      
+    END DO
+  
+  CLOSE(lfnosb)
+  RETURN
+
+100 WRITE(ERROR_UNIT,'(A)') '***ERROR(read_osb): read the osb file error '//TRIM(line)
+  CALL exit(1)
+
+END SUBROUTINE
+
+!*
+SUBROUTINE read_singledayosb(CKF,OsbValue)
+!!
+!! Read for one-day Code OSB
+!!
+!*
+USE const
+USE ckdctrl
+USE ISO_FORTRAN_ENV
+IMPLICIT NONE
+
+!*
+! The arguments
+!!------------------------
+TYPE(CKDCFG) :: CKF
+!单天OSB
+!   2 :1-C;2-L
+!   10:freq(1,2,5,6,7,8)
+!   16:channel(PWCIXSAQLDBYMZN)
+REAL(RL) :: OsbValue(MAXSAT,2,10,16)
+
+    !*
+    !  The local variables
+    !!-----------------------------
+    LOGICAL(LG) :: lfirst,lexist
+    INTEGER(IT) :: i,j,k,iyear,idoy,year,doy,ifreq,isys,ind_freq,ind_channel
+    
+    INTEGER(IT) :: lfnosb,ierr
+    INTEGER(IT) :: mjdx,isat
+    REAL(RL) :: sodx,osb,std
+    CHARACTER(LEN_STRING) :: line
+    
+    CHARACTER(LEN_PRN) :: cprn,freqtp
+
+    !*
+    ! The function called
+    !!-----------------------------
+    INTEGER(IT) :: modified_julday
+    INTEGER(IT) :: get_valid_unit
+    INTEGER(IT) :: pointer_string
+    !*
+    ! Start the exectuable code
+    !!-----------------------------
+  
+    CALL mjd2doy(CKF.mjd0,iyear,idoy)
+    
+    INQUIRE(FILE=CKF.flnosbcode, EXIST=lexist)
+    IF (lexist .EQ. .TRUE.)THEN
+      lfnosb = get_valid_unit(10)
+      OPEN(UNIT=lfnosb,FILE=CKF.flnosbcode,STATUS='OLD')
+      line=' '
+      !! 读取OSB文件第一行，判断时间是否匹配
+      READ(lfnosb,'(a)',END=100) line
+      READ(line,'(34X,I4,1X,I3)') year,doy
+      
+      IF (year .NE. iyear .OR. doy .NE. idoy) THEN
+        WRITE(ERROR_UNIT,'(A)') '***WARNING(read_osb): the osb file is mismatch '//TRIM(CKF.flnosbcode)
+        RETURN
+      END IF 
+            
+      DO WHILE(INDEX(line,'+BIAS/SOLUTION') .EQ. 0)
+        READ(lfnosb,'(a)',END=100) line
+      END DO
+      READ(lfnosb,'(a)',END=100) line
+    ELSE
+      WRITE(ERROR_UNIT,'(A)') '***WARNING(read_osb): the osb file is not exist '//TRIM(CKF.flnosbcode)
+      RETURN
+    END IF
+
+    !! 读取osb,获取指定通道的伪距OSB
+    DO WHILE(INDEX(line,'-BIAS/SOLUTION') .EQ. 0)
+      line = ' '
+      READ(lfnosb,'(a)',END=100) line
+      READ(line,'(11X,A3,11X,A3,40X,F23.4,1X,F11.4)')cprn,freqtp,osb,std
+      isys = index(SYS,cprn(1:1))
+      IF(isys .EQ. 0) CYCLE
+      
+      isat = pointer_string(CKF.nprn,CKF.cprn,cprn)
+      IF (isat .NE. 0) THEN
+        READ(freqtp(2:2),'(I1)')ind_freq
+        ind_channel = INDEX(OBSTYPE,freqtp(3:3))
+
+        IF (freqtp(1:1) .EQ. 'C') THEN
+          OsbValue(isat,1,ind_freq,ind_channel) = osb
+        ELSE IF (freqtp(1:1) .EQ. 'L') THEN
+          OsbValue(isat,2,ind_freq,ind_channel) = osb
+        END IF
+      END IF      
+    END DO
+  
+    CLOSE(lfnosb)
+    RETURN
+
+100 WRITE(ERROR_UNIT,'(A)') '***ERROR(read_osb): read the osb file error '//TRIM(line)
+    CALL exit(1)
+
+END SUBROUTINE

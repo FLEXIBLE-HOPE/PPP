@@ -1,0 +1,350 @@
+C*
+      SUBROUTINE RDIXFL(INXFIL,MAXVAL,MAXADT,ADTLBL,SATSTR,PGMSTR,
+     1                  AGESTR,DATSTR,TITTXT,MAPSTR,OBSTXT,INXSP1,
+     2                  INXSP2,ADTLST,INXINF,TECMAP,IRC   )
+CC
+CC NAME       :  RDIXFL
+CC
+CC PURPOSE    :  READ IONEX FILE
+CC
+CC PARAMETERS :
+CC         IN :  INXFIL : EXTERNAL IONEX INPUT FILE NAME      CH*32
+CC               MAXVAL : MAXIMUM NUMBER OF TEC/RMS VALUES    I*4
+CC                        =0: READ HEADER ONLY
+CC               MAXADT : MAXIMUM NUMBER OF AUX RECORDS       I*4
+CC     IN/OUT :  ADTLBL : LABEL OF AUX DATA REQUESTED/FOUND   CH*60
+CC                        =' ': NOT REQUESTED/FOUND
+CC        OUT :  SATSTR : SATELLITE SYSTEM                    CH*20
+CC               PGMSTR : PROGRAM                             CH*20
+CC               AGESTR : AGENCY                              CH*20
+CC               DATSTR : DATE AND TIME                       CH*20
+CC               TITTXT : TITLE LINE / FIRST COMMENT LINE     CH*60
+CC                        =' ': UNDEFINED
+CC               MAPSTR : MAPPING FUNCTION                    CH*4
+CC               OBSTXT : OBSERVABLES USED                    CH*60
+CC               INXSP1 : SPECIFICATIONS 1                    R*8(*)
+CC                        ( 1): EPOCH OF FIRST MAP (IN MJD)
+CC                        ( 2): EPOCH OF LAST MAP (IN MJD)
+CC                        ( 3): INTERVAL (IN SEC)
+CC                        ( 4): FROM LATITUDE
+CC                        ( 5): TO LATITUDE
+CC                        ( 6): WITH INCREMENT (IN DEG)
+CC                        ( 7): FROM LONGITUDE
+CC                        ( 8): TO LONGITUDE
+CC                        ( 9): WITH INCREMENT (IN DEG)
+CC                        (10): ELEVATION CUTOFF (IN DEG)
+CC                        (11): BASE RADIUS (IN KM)
+CC                        (12): FROM HEIGHT
+CC                        (13): TO HEIGHT
+CC                        (14): WITH INCREMENT (IN KM)
+CC               INXSP2 : SPECIFICATIONS 2                    I*4(*)
+CC                        =0: NOT FOUND
+CC                        (1): NUMBER OF STATIONS
+CC                        (2): NUMBER OF SATELLITES
+CC               ADTLST(I),I=1,..,MAXADT: LIST OF AUX DATA    CH*80(*)
+CC               INXINF : INFORMATION FOUND                   I*4(*)
+CC                        =0/1: NO/YES
+CC                        (1): TEC MAPS
+CC                        (2): RMS MAPS
+CC               TECMAP(I,J),I=1,..,MAXVAL,J=1,2: TEC/RMS MAP R*8(*,*)
+CC                        (IN TECU)
+CC                        =999.9: UNDEFINED
+CC               IRC    : RETURN CODE                         I*4
+CC                        =0: ERROR OCCURRED
+CC                        =1: OK
+CC
+CC SR CALLED  :  DJUL  , GTIXPS, OPNERR, OPNFIL, RDIXHD, RDIXDT
+CC
+CC REMARKS    :  IONEX VERSION 1.0
+CC
+CC AUTHOR     :  S.SCHAER
+CC
+CC VERSION    :  4.1
+CC
+CC CREATED    :  25-SEP-97             LAST MODIFIED :  07-OCT-98
+CC
+CC CHANGES    :  13-NOV-97 : SS: RETURN FIRST COMMENT LINE
+CC               20-NOV-97 : SS: READ HEADER ONLY
+CC               09-MAR-98 : SS: USE SR GTIXPS
+CC               08-APR-98 : SS: SR GTIXPS REFINED
+CC               07-OCT-98 : SS: CHECK WHETHER LAST DATA BLOCK CLOSED
+CC
+CC COPYRIGHT  :  ASTRONOMICAL INSTITUTE
+CC      1997      UNIVERSITY OF BERNE
+CC                    SWITZERLAND
+CC
+C*
+      IMPLICIT REAL*8 (A-H,O-Z)
+C
+      CHARACTER*80  ADTLST(*),LINE
+      CHARACTER*60  OBSTXT,ADTLBL,TITTXT
+      CHARACTER*32  INXFIL
+      CHARACTER*20  SATSTR,PGMSTR,AGESTR,DATSTR,INXREC(11),AUXREC
+      CHARACTER*4   MAPSTR
+C
+      REAL*8        INXSP1(*),TECMAP(MAXVAL,*),INPARG(4),OUTARG(4)
+C
+      INTEGER*4     INXSP2(*),INXINF(*)
+      INTEGER*4     NUMMAP(3),NUMNEG(2)
+C
+      INCLUDE 'I:COMLFNUM'
+C
+C SET IONEX RECORDS
+C -----------------
+      DATA INXREC/'START OF TEC MAP    ','START OF RMS MAP    ',
+     1            'START OF HEIGHT MAP ','EPOCH OF CURRENT MAP',
+     2            'EXPONENT            ','COMMENT             ',
+     3            'LAT/LON1/LON2/DLON/H','END OF TEC MAP      ',
+     4            'END OF RMS MAP      ','END OF HEIGHT MAP   ',
+     5            'END OF FILE         '/
+C
+C OPEN IONEX INPUT FILE
+C ---------------------
+      CALL OPNFIL(LFNLOC,INXFIL,'OLD','FORMATTED',
+     1  'READONLY',' ',IOSTAT)
+      CALL OPNERR(LFNERR,LFNLOC,IOSTAT,INXFIL,'RDIXFL')
+C
+C READ IONEX HEADER
+C -----------------
+      CALL RDIXHD(MAXADT,ADTLBL,SATSTR,PGMSTR,AGESTR,DATSTR,
+     1            TITTXT,MAPSTR,OBSTXT,INXSP1,INXSP2,ADTLST,
+     2            IEXP  ,IRC   )
+C
+      IF (IRC.EQ.0 .OR. MAXVAL.EQ.0) GOTO 300
+C
+      XINT=INXSP1(3)/86400.D0
+      NMAP=IDNINT((INXSP1(2)-INXSP1(1))/XINT)+1
+C
+      NLAT=IDNINT((INXSP1(5)-INXSP1(4))/INXSP1(6))+1
+      NLON=IDNINT((INXSP1(8)-INXSP1(7))/INXSP1(9))+1
+C
+      IF (INXSP1(14).EQ.0.D0) THEN
+        NHGT=1
+      ELSE
+        NHGT=IDNINT((INXSP1(13)-INXSP1(12))/INXSP1(14))+1
+      ENDIF
+C
+      NVAL=NMAP*NHGT*NLAT*NLON
+C
+      IF (NVAL.GT.MAXVAL) THEN
+        WRITE(LFNERR,1901) NVAL,MAXVAL
+1901    FORMAT(/,' *** SR RDIXFL: TOO MANY TEC/RMS VALUES',
+     1    /,16X,'NUMBER OF VALUES : ',I6,
+     2    /,16X,'MAXIMUM NUMBER   : ',I6,/)
+C
+        IRC=0
+        GOTO 300
+      ENDIF
+C
+C INITIALIZE TEC/RMS MAPS
+C -----------------------
+      DO ITYP=1,2
+        DO IVAL=1,NVAL
+          TECMAP(IVAL,ITYP)=-999.9D0
+        ENDDO
+        NUMMAP(ITYP)=0
+      ENDDO
+      NUMMAP(3)=0
+C
+      ITYP=0
+C
+C LOOP OVER ALL DATA LINES
+C ------------------------
+400   CONTINUE
+      READ(LFNLOC,901,END=100) LINE
+901   FORMAT(A80)
+C
+C CURRENT KEYWORD
+      AUXREC=LINE(61:80)
+C
+C LOOK FOR CURRENT KEYWORD AND STORE CORRESPONDING INFORMATION
+C ------------------------------------------------------------
+C
+C "START OF TEC MAP"
+      IF (AUXREC.EQ.INXREC(1)) THEN
+        IF (ITYP.NE.0) GOTO 201
+        READ(LINE,911,ERR=200) IMAP
+911     FORMAT(I6)
+C
+        ITYP=1
+        NUMMAP(ITYP)=NUMMAP(ITYP)+1
+C
+C "START OF RMS MAP"
+      ELSEIF (AUXREC.EQ.INXREC(2)) THEN
+        IF (ITYP.NE.0) GOTO 201
+        READ(LINE,911,ERR=200) IMAP
+C
+        ITYP=2
+        NUMMAP(ITYP)=NUMMAP(ITYP)+1
+C
+C "START OF HEIGHT MAP"
+      ELSEIF (AUXREC.EQ.INXREC(3)) THEN
+        IF (ITYP.NE.0) GOTO 201
+        READ(LINE,911,ERR=200) IMAP
+C
+        ITYP=3
+        NUMMAP(ITYP)=NUMMAP(ITYP)+1
+C
+C SKIP HEIGHT MAP
+401     CONTINUE
+        READ(LFNLOC,901,END=100) LINE
+        AUXREC=LINE(61:80)
+        IF (AUXREC.EQ.INXREC(10)) GOTO 400
+        GOTO 401
+C
+C "EPOCH OF CURRENT MAP"
+      ELSEIF (AUXREC.EQ.INXREC(4)) THEN
+        READ(LINE,921,ERR=200) IYEAR,IMONTH,IDAY,IHOUR,IMIN,ISEC
+921     FORMAT(6I6)
+C
+        XEPO=DJUL(IYEAR,IMONTH,IDAY+IHOUR/24.D0+
+     1    IMIN/1440.D0+ISEC/86400.D0)
+        XEPO0=INXSP1(1)+(IMAP-1)*INXSP1(3)/86400.D0
+        IDIF=IDNINT(DABS((XEPO-XEPO0))*86400.D0)
+C
+        IF (IDIF.NE.0) THEN
+          WRITE(LFNERR,1902) IMAP,ITYP
+1902      FORMAT(/,' *** SR RDIXFL: "EPOCH OF CURRENT MAP" WRONG',
+     1      /,16X,'MAP NUMBER : ',I6,
+     2      /,16X,'MAP TYPE   : ',I6,/)
+          IRC=0
+          GOTO 300
+        ENDIF
+C
+C "EXPONENT"
+      ELSEIF (AUXREC.EQ.INXREC(5)) THEN
+        READ(LINE,911,ERR=200) IEXP
+C
+C "COMMENT"
+      ELSEIF (AUXREC.EQ.INXREC(6)) THEN
+        GOTO 400
+C
+C "LAT/LON1/LON2/DLON/H"
+      ELSEIF (AUXREC.EQ.INXREC(7)) THEN
+        IF (ITYP.EQ.0) THEN
+          WRITE(LFNERR,1903) LINE
+1903      FORMAT(/,' *** SR RDIXFL: MAP TYPE UNDEFINED',
+     1      /,A80,/)
+          IRC=0
+          GOTO 300
+        ENDIF
+C
+        READ(LINE,931,ERR=200) XLAT,XLON1,XLON2,XDLON,XHGT
+931     FORMAT(2X,5F6.1)
+C
+C GET INITIAL POSITION
+        INPARG(1)=XEPO
+        INPARG(2)=XLAT
+        INPARG(3)=XLON1
+        INPARG(4)=XHGT
+        CALL GTIXPS(INXSP1,1,INPARG,OUTARG,IVAL)
+C
+C READ TEC/RMS DATA BLOCK
+        CALL RDIXDT(NLON,IEXP,TECMAP(IVAL,ITYP),IRC)
+C
+        IF (IRC.EQ.0) GOTO 300
+C
+C "END OF TEC MAP"
+      ELSEIF (AUXREC.EQ.INXREC(8)) THEN
+        ITYP=0
+        GOTO 400
+C
+C "END OF RMS MAP"
+      ELSEIF (AUXREC.EQ.INXREC(9)) THEN
+        ITYP=0
+        GOTO 400
+C
+C "END OF FILE"
+      ELSEIF (AUXREC.EQ.INXREC(11)) THEN
+        GOTO 500
+C
+C SKIP BLANK LINES
+      ELSEIF (LINE.EQ.' ') THEN
+        GOTO 400
+C
+C UNKNOWN DATA RECORD FOUND
+      ELSE
+        WRITE(LFNERR,1904) LINE
+1904    FORMAT(/,' ### SR RDIXFL: UNIDENTIFIED IONEX DATA RECORD',
+     1    /,A80,/)
+        GOTO 400
+      ENDIF
+C
+C GOTO NEXT DATA LINE
+C -------------------
+      GOTO 400
+C
+C SOME FINAL CHECKS
+C -----------------
+500   CONTINUE
+      DO ITYP=1,2
+        IF (NUMMAP(ITYP).GT.0) THEN
+          INXINF(ITYP)=1
+        ELSE
+          INXINF(ITYP)=0
+        ENDIF
+      ENDDO
+C
+C CHECK WHETHER ALL TEC/RMS VALUES ARE AVAILABLE
+      DO ITYP=1,2
+        NUMNEG(ITYP)=0
+        DO IVAL=1,NVAL
+          IF (TECMAP(IVAL,ITYP).EQ.-999.9D0) THEN
+            NUMNEG(ITYP)=NUMNEG(ITYP)+1
+            TECMAP(IVAL,ITYP)=999.9D0
+          ENDIF
+        ENDDO
+C
+        IF (INXINF(ITYP).EQ.1 .AND. NUMNEG(ITYP).GT.0) THEN
+          WRITE(LFNERR,1911) NUMNEG(ITYP),ITYP
+1911      FORMAT(/,' *** SR RDIXFL: TEC/RMS VALUES MISSING',
+     1      /,16X,'NUMBER OF VALUES : ',I6,
+     2      /,16X,'MAP TYPE         : ',I6,/)
+          IRC=0
+        ENDIF
+      ENDDO
+C
+C HEIGHT MAPS SKIPPED
+      IF (NUMMAP(3).GT.0) THEN
+        WRITE(LFNERR,1912) NUMMAP(3)
+1912    FORMAT(/,' ### SR RDIXFL: HEIGHT MAPS SKIPPED',
+     1    /,16X,'NUMBER OF MAPS: ',I6,/)
+      ENDIF
+C
+      GOTO 300
+C
+C END OF FILE REACHED
+C -------------------
+100   CONTINUE
+      WRITE(LFNERR,1921)
+1921  FORMAT(/,' *** SR RDIXFL: END OF FILE REACHED',/)
+C
+      IRC=0
+      GOTO 300
+C
+C ERROR READING IONEX FILE
+C ------------------------
+200   CONTINUE
+      WRITE(LFNERR,1922) LINE
+1922  FORMAT(/,' *** SR RDIXFL: ERROR READING IONEX FILE',
+     1  /,A80,/)
+C
+      IRC=0
+      GOTO 300
+C
+C DATA BLOCK NOT CLOSED
+C ---------------------
+201   CONTINUE
+      WRITE(LFNERR,1923) 
+1923  FORMAT(/,' *** SR RDIXFL: DATA BLOCK NOT CLOSED',/)
+C
+      IRC=0
+      GOTO 300
+C
+C CLOSE IONEX INPUT FILE
+C ----------------------
+300   CONTINUE
+      CLOSE (UNIT=LFNLOC)
+C
+      RETURN
+      END

@@ -1,0 +1,41 @@
+!*
+SUBROUTINE NORMAL(U,P)
+!!
+!! PARAMETERS :
+!!         IN :  U : NORMAL OFFSET POINT                                 R*8
+!!
+!!        OUT :  P : DOWN SATAT.                                         R*8
+!!
+IMPLICIT REAL*8 (A-H,O-Z)
+
+  IF (U.LT.-5.D0) THEN
+    P=0.D0
+    RETURN
+  END IF
+
+  IF (U.GT.5.D0) THEN
+    P=1.D0
+    RETURN
+  END IF
+
+  Y=DABS(U)/DSQRT(2.D0)
+
+  A1=.0705230784D0
+  A2=.0422820123D0
+  A3=.0092705272D0
+  A4=.0001520143D0
+  A5=.0002765672D0
+  A6=.0000430638D0
+
+  ER=1.D0-(1.D0+Y*(A1+Y*(A2+Y*(A3+Y*(A4+Y*(A5+Y*A6))))))**(-16)
+  Q=.5D0*ER
+
+  IF (U.LT.0.D0) THEN
+    P=.5D0-Q
+  ELSE
+    P=.5D0+Q
+  END IF
+
+  RETURN
+
+END SUBROUTINE
