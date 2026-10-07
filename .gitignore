@@ -19,8 +19,18 @@ fcb
 oi
 t_sofa_f
 
+# Stray ar archive left by a Makefile run (build artifact, 6.3MB)
+exe_ppp/stZVuCc3
+
 # Vendored LAPACK source (build links against Intel MKL instead)
 lapack-3.12.0/
+
+# CMake build directory (Trae / CMake Tools)
+build/
+build_debug/
+build_release/
+build_relwithdebinfo/
+cmake-build-*/
 
 # Compressed archives
 *.zip

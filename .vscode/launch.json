@@ -1,0 +1,109 @@
+{
+    // 参考 /home/xfd/ckdrt_irc_cr_orb_sdb/.vscode/launch.json 编写, 只保留 ppp。
+    // 两个配置分别对应两个 CMake 构建目录, 需要先各自 Configure 一次:
+    //   cmake -S . -B build_debug   -DCMAKE_BUILD_TYPE=Debug
+    //   cmake -S . -B build_release -DCMAKE_BUILD_TYPE=Release
+    // 这里不需要先 source oneAPI 的 setvars.sh —— CMakeLists 已把 configure
+    // 和链接两步所需的 Intel 运行库环境都处理好了。
+    "version": "0.2.0",
+    "configurations": [
+        {
+            // 出现在 Trae 界面上的名字
+            "name": "debug ppp",
+            // debugger 类型, 这是 gdb
+            "type": "cppdbg",
+            "request": "launch",
+            // 可执行文件位置
+            "program": "${workspaceFolder}/build_debug/ppp",
+            "args": [
+                "file_table_ppp",
+                "-post"
+            ],
+            // 是否进入后暂停
+            "stopAtEntry": false,
+            // 工作目录: ppp 以 argv[1] 为相对路径找 file_table_ppp,
+            // 所以 cwd 必须是直接放着 file_table_ppp 的那个会话目录。
+            "cwd": "/home/xfd/PPP_workspace/multiphase",
+            // 换会话时改这一行即可, 例如:
+            // "cwd": "/home/xfd/data/PPP_WORKSPACE/AR/GBM/2026139_03",
+            // "cwd": "/home/xfd/data/PPP_WORKSPACE/AR/HUS/2026140_15",
+            "environment": [
+                {
+                    "name": "DEBUGINFOD_URLS",
+                    "value": ""
+                }
+            ],
+            // 是否使用外部终端
+            "externalConsole": false,
+            // debug 之前要运行的任务 (默认不开; 想保存即自动重编再打开)
+            // "preLaunchTask": "CMake: build",
+            "MIMode": "gdb",
+            "setupCommands": [
+                {
+                    "description": "为 gdb 启用整齐打印",
+                    "text": "-enable-pretty-printing",
+                    "ignoreFailures": true
+                },
+                {
+                    "description": "将反汇编风格设置为 Intel",
+                    "text": "-gdb-set disassembly-flavor intel",
+                    "ignoreFailures": true
+                },
+                {
+                    "description": "禁用 debuginfod 联网下载",
+                    "text": "set debuginfod enabled off",
+                    "ignoreFailures": true
+                }
+            ],
+            // gdb 的位置 (这个 wrapper 会先 unset DEBUGINFOD_URLS 再 exec gdb)
+            "miDebuggerPath": "/home/xfd/gdb-wrapper.sh"
+        },
+        {
+            // 出现在 Trae 界面上的名字
+            "name": "release ppp",
+            // debugger 类型, 这是 gdb
+            "type": "cppdbg",
+            "request": "launch",
+            // 可执行文件位置
+            "program": "${workspaceFolder}/build_release/ppp",
+            "args": [
+                "file_table_ppp",
+                "-post"
+            ],
+            // 是否进入后暂停
+            "stopAtEntry": false,
+            // 工作目录: 同 debug ppp
+            "cwd": "/home/xfd/PPP_workspace/multiphase",
+            "environment": [
+                {
+                    "name": "DEBUGINFOD_URLS",
+                    "value": ""
+                }
+            ],
+            // 是否使用外部终端
+            "externalConsole": false,
+            // debug 之前要运行的任务 (默认不开)
+            // "preLaunchTask": "CMake: build",
+            "MIMode": "gdb",
+            "setupCommands": [
+                {
+                    "description": "为 gdb 启用整齐打印",
+                    "text": "-enable-pretty-printing",
+                    "ignoreFailures": true
+                },
+                {
+                    "description": "将反汇编风格设置为 Intel",
+                    "text": "-gdb-set disassembly-flavor intel",
+                    "ignoreFailures": true
+                },
+                {
+                    "description": "禁用 debuginfod 联网下载",
+                    "text": "set debuginfod enabled off",
+                    "ignoreFailures": true
+                }
+            ],
+            // gdb 的位置
+            "miDebuggerPath": "/home/xfd/gdb-wrapper.sh"
+        }
+    ]
+}
